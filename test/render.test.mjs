@@ -273,6 +273,53 @@ function collectText(node, out = []) {
   return out;
 }
 
+/**
+ * 计算某元素上某个属性的**级联胜出值** —— 而不是「规则里有没有写这个声明」。
+ *
+ * 【为什么需要它】审计指出：原来的 CSS 断言只检查「规则文本里存在 width:auto」，
+ * 于是两条**实际从未生效**的规则（.dscc-filters-search 的 width:auto、
+ * .dscc-panel-section 的 padding/height）都能让测试变绿。
+ * 这不是测试写漏了，是**断言的层次错了**。
+ *
+ * 这里按 CSS 级联规范取值：
+ *   ① 只保留「选择器命中该元素」的规则；
+ *   ② 比优先级 (a,b,c) —— id 数 / 类+属性+伪类数 / 元素数；
+ *   ③ 优先级相同则比**源码顺序**，后者胜。
+ *
+ * 只支持本文件用到的简单选择器（类、元素、与它们的组合），够用且不引入依赖。
+ *
+ * @param {string} sheet  CSS 文本
+ * @param {string} classList 元素上实际带的类（空格分隔）
+ * @param {string} prop  属性名
+ * @returns {string|null} 胜出的声明值（已去空白），无候选则 null
+ */
+function cascadeWinner(sheet, classList, prop) {
+  const classes = classList.split(/\s+/).filter(Boolean);
+  const declRe = /(^|\n)\s*([^{}\n]+?)\s*\{([^}]*)\}/g;
+  const hits = [];
+  let m;
+  while ((m = declRe.exec(sheet)) !== null) {
+    const decls = m[3];
+    const pm = new RegExp("(?:^|;)\\s*" + prop + "\\s*:\\s*([^;]+)").exec(decls);
+    if (pm === null) continue;
+    for (const rawSel of m[2].split(",")) {
+      const sel = rawSel.trim();
+      if (sel === "" || /[>+~:[\]@]/.test(sel)) continue; // 只处理简单选择器
+      const parts = sel.split(/\s+/).filter(Boolean);
+      // 类必须都在元素上；不含类的组合（如 `div`）按元素名匹配，本用例中一律视为命中
+      const needClasses = parts.flatMap((p) => (p.match(/\.[\w-]+/g) ?? []).map((x) => x.slice(1)));
+      if (!needClasses.every((c) => classes.includes(c))) continue;
+      const a = (sel.match(/#[\w-]+/g) ?? []).length;
+      const b = (sel.match(/\.[\w-]+/g) ?? []).length;
+      const c = parts.filter((p) => /^[a-zA-Z]/.test(p)).length;
+      hits.push({ sel, spec: a * 1e6 + b * 1e3 + c, order: m.index, val: pm[1].trim() });
+    }
+  }
+  if (hits.length === 0) return null;
+  hits.sort((x, y) => x.spec - y.spec || x.order - y.order);
+  return hits[hits.length - 1].val;
+}
+
 const MENU_SLOT = "sidebar.workspaces.session.menu.item";
 const OVERLAY_SLOT = "shell.overlay";
 const SECTION_SLOT = "settings.section";
@@ -299,6 +346,24 @@ test("渲染：会话行菜单项能渲染出 role=menuitem 的按钮（不抛�
   const button = tree.find((node) => node.type === "button");
   assert.ok(button, "必须找到 button 元素");
   assert.equal(button.props.role, "menuitem", "button 必须带 role=menuitem");
+
+  // 【实测修复 · H1 回归】菜单项必须**自带样式表**。
+  //
+  // 会话行右侧「⋮」菜单在 sidebar 的 slot 里渲染，与设置面板**不共享 React 树**；
+  // 原实现只在 DeleteDialog / 面板里渲染 <Styles>，于是菜单项完全没有样式
+  // （`.dscc-menu-row` / `.dscc-sep` 全部不生效），直到打开弹窗或设置页才短暂生效。
+  // 已用真实渲染取证过：修复前标签序列不含 style。
+  assert.ok(
+    tags.includes("style"),
+    `菜单项必须自带 <style>，否则 .dscc-menu-row 等规则不生效（实际标签：${tags.join(",")}）`,
+  );
+  const styleNode = tree.find((node) => node.type === "style");
+  assert.ok(styleNode, "必须能取到 style 元素");
+  assert.equal(styleNode.props["data-dscc"], "styles", "style 必须带 data-dscc 标记（便于识别与去重）");
+  assert.ok(
+    String(styleNode.children[0]).includes(".dscc-menu-row"),
+    "样式表内容必须包含菜单项用到的 .dscc-menu-row",
+  );
 });
 
 test("渲染：useMenuOpenState 缺席时菜单项仍能渲染（优雅降级）", () => {
@@ -647,10 +712,32 @@ test("布局 CSS：筛选网格标签列与控件列都定宽，行内容可省�
     /\.dscc-filters-row\s*>\s*\.dscc-btn\s*\{[^}]*flex:\s*none/,
     "刷新按钮必须 flex:none（不被压缩）",
   );
-  // 搜索框不能沿用 width:100%（那会把按钮挤到 min-content）
-  const searchRule = /\.dscc-filters-search\s*\{([^}]*)\}/.exec(sheet);
-  assert.ok(searchRule, "必须有 .dscc-filters-search 规则");
-  assert.match(searchRule[1], /width:\s*auto/, "搜索框在 flex 行里必须 width:auto，否则独占整行挤扁按钮");
+  // 搜索框不能沿用 width:100%（那会把按钮挤到 min-content）。
+  //
+  // 【M2 回归 · 必须算级联，不能只看「声明存在」】
+  // 原来这里断言的是「.dscc-filters-search 规则里有 width:auto」—— 那条断言
+  // 一直通过，但**规则从未生效**：它和 .dscc-input 同为单类选择器（0,1,0），
+  // 而 .dscc-input 在源码里排在其后 ⇒ width:100% 胜出。
+  // 现在改为计算真正的胜出者（见下方 cascadeWinner 辅助）。
+  assert.equal(
+    cascadeWinner(sheet, "dscc-input dscc-filters-search", "width"),
+    "auto",
+    "搜索框的 width:auto 必须**真的**胜出（不能只写在规则里被 .dscc-input 覆盖）",
+  );
+
+  // 【M1 回归】面板高度/内边距的覆盖同理必须真的生效。
+  // 原来 `.dscc-panel-section`（0,1,0）排在其后于 `.dscc-panel` 之前 ⇒ 被完全覆盖，
+  // 设置页内容列的自适应高度从未生效。
+  assert.equal(
+    cascadeWinner(sheet, "dscc-panel dscc-panel-section", "padding"),
+    "0",
+    "设置页里面板的 padding:0 必须真的胜出",
+  );
+  assert.equal(
+    cascadeWinner(sheet, "dscc-panel dscc-panel-section", "height"),
+    "auto",
+    "设置页里面板必须自适应高度（height:auto 真的胜出）",
+  );
 
   // 卡片行：主内容列必须 min-width:0，否则省略号不生效
   const mainRule = /\.dscc-row-main\s*\{([^}]*)\}/.exec(sheet);

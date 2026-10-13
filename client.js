@@ -526,8 +526,14 @@ window.__ModuleLoader__.load({
 
 /* ───────────── 批量管理面板（设置页 section） ───────────── */
 .dscc-section { display: block; }
-/* 设置页内容列自己滚动，所以这里用自适应高度而不是 100vh。 */
-.dscc-panel-section { height: auto; padding: 0; background: transparent; }
+/* 设置页内容列自己滚动，所以这里用自适应高度而不是 100vh。
+   【实测修复 · 级联】必须写成 .dscc-panel.dscc-panel-section（优先级 0,2,0）。
+   原来只写 .dscc-panel-section（0,1,0），与 .dscc-panel 同优先级且**排在其前**，
+   于是 .dscc-panel 的 height:100% / padding:20px 22px / background 全部胜出 ——
+   这条规则从未生效。已用真浏览器 computed style 取证：
+   padding 实为 20px 22px、背景实为白色，正是 .dscc-panel 的值。
+   （注释内不得写反引号：CSS 在 JS 模板串里，会提前终止。） */
+.dscc-panel.dscc-panel-section { height: auto; padding: 0; background: transparent; }
 .dscc-panel {
   display: flex; flex-direction: column; gap: 12px;
   height: 100%; box-sizing: border-box; padding: 20px 22px;
@@ -557,11 +563,24 @@ window.__ModuleLoader__.load({
    min-content 就是**一个字宽**，截图里「刷新」因此竖排成「刷／新」。
    修法：按钮 flex:none（不收缩）+ white-space:nowrap（不许断行）。 */
 .dscc-filters-row { display: flex; align-items: center; gap: 8px; }
-/* 搜索框：在 flex 行里用 flex-basis 分配宽度，**不要**用 width:100%
+/* 搜索框：在 flex 行里用 flex 分配宽度，**不要**用 width:100%
    —— 通用 .dscc-input 是 width:100%（用于网格里的整列控件），
    放进 flex 行会让它独占整行、把按钮挤到 min-content，文字因此竖排。
-   这里显式覆盖：flex 决定宽度，width 交还给 auto。 */
-.dscc-filters-search { flex: 1 1 auto; width: auto; min-width: 0; }
+
+   【实测修复 · 级联（这条我自己写错过一次，必须记下来）】
+   曾经写的是 .dscc-filters-search { width: auto; } —— **它从未生效**。
+   两者都是单类选择器（优先级 0,1,0），而 .dscc-input { width: 100% }
+   在源码里**排在其后**，同优先级比顺序 ⇒ 100% 胜出。
+   也就是说当时注释里写的「width 交还给 auto」是假的。
+   （症状没暴露，是因为通用的 .dscc-input{width:100%} 配 .dscc-filters-row>
+   的 flex:none 恰好也没把按钮压扁 —— 但这属于巧合，不是设计。）
+
+   现在写成 .dscc-input.dscc-filters-search（优先级 0,2,0），
+   无论 .dscc-input 排在哪里都能稳定覆盖。
+   同文件里 .dscc-panel.dscc-panel-section 是同一个坑的另一例。
+
+   ⚠ 本段注释里不能用反引号（CSS 在 JS 模板字符串里）。已因此踩坑四次。 */
+.dscc-input.dscc-filters-search { flex: 1 1 auto; width: auto; min-width: 0; }
 /* 刷新按钮：不收缩 + 不折行。 */
 .dscc-filters-row > .dscc-btn { flex: none; }
 
@@ -773,6 +792,12 @@ window.__ModuleLoader__.load({
       return h(
         React.Fragment,
         null,
+        // 【实测修复 · H1：菜单项必须在**自己的树里**挂样式表。
+        // 原来这里只有分隔线 + 按钮，而 `<style>` 只在 DeleteDialog / 面板里渲染 ——
+        // 所以会话行右侧「⋮」菜单里的「删除」项**完全没有样式**：
+        // 直到打开弹窗或设置页才短暂生效，弹窗一关又没了。
+        // 已用真实渲染取证：菜单项的标签序列是 div,button,svg,path,...,span，不含 style。
+        h(Styles, null),
         h("div", { className: "dscc-sep", role: "separator", "aria-hidden": "true" }),
         h(
           "button",
@@ -1050,11 +1075,13 @@ window.__ModuleLoader__.load({
           ),
         );
       } else {
+        // 【H2/M4】这里原来有个 `isBulk && state.total ? t("panel.busy", {done,total}) : …`
+        // 的分支，但 `state.total` / `state.done` **从来不会被写入** ——
+        // 批量删除是**一次请求**（见 postDelete / requestDeleteMany），宿主端整批处理，
+        // 客户端拿不到「已完成几条」的中间进度。所以那个分支永远走不到，
+        // 硬凑一个「处理中 0/N…」反而是**假进度**（数字永远不动）。
+        // 现在统一用「正在删除」，如实反映「一次请求、等待结果」的真实过程。
         const isBulk = Array.isArray(state.bulkIds) && state.bulkIds.length > 1;
-        const busyLabel =
-          isBulk && state.total
-            ? t("panel.busy", { done: state.done ?? 0, total: state.total })
-            : t("action.deleting");
         body = h(
           "div",
           { className: "dscc-card" },
@@ -1066,6 +1093,8 @@ window.__ModuleLoader__.load({
             h("span", null, `${t("confirm.body", { title: "" })}`),
             h("span", { className: "dscc-subject" }, state.displayTitle || state.sessionId),
           ),
+          // 批量删除是**一次请求**，没有「已完成几条」的中间状态；
+          // 因此这里统一显示「正在删除」，不做假进度。
           isBulk ? null : h(
             "p",
             null,
@@ -1089,7 +1118,7 @@ window.__ModuleLoader__.load({
             h(
               "button",
               { type: "button", className: "dscc-btn dscc-btn-danger", disabled: state.busy === true, onClick: run },
-              state.busy === true ? busyLabel : t("confirm.ok"),
+              state.busy === true ? t("action.deleting") : t("confirm.ok"),
             ),
           ),
         );
@@ -1228,8 +1257,12 @@ window.__ModuleLoader__.load({
       });
       const [state, setState] = React.useState({ status: "loading", value: null, error: null });
       const [selected, setSelected] = React.useState({});
-      const [busy, setBusy] = React.useState(null);
-      const [result, setResult] = React.useState(null);
+      // 【实测修复 · H2/M4】这里原有一对 `busy` / `result` state。
+      // 它们只被已删除的 `doDelete`（内联批量删除的旧实现）写入 ——
+      // 而面板真正走的是「删除所选 → 打开确认弹窗 → DeleteDialog.run()」这条路径，
+      // 进度与结果都记在弹窗自己的 state 里。于是 `busy` 恒为 null、
+      // `result` 恒为 null：所有 `busy !== null` 的禁用条件、进度文字、
+      // 结果条全都不可能触发。一并删掉，避免「看着是活的」的假象。
       const [reloadTick, setReloadTick] = React.useState(0);
       // 行菜单 / 批量弹窗删完后会推一个模块级信号；面板据此自动刷新。
       const externalReload = useReloadSignal();
@@ -1277,83 +1310,50 @@ window.__ModuleLoader__.load({
       const deletableOnPage = items.filter((row) => row.deletable === true);
 
       /**
-       * 【安全修正】选中项只在**当前可见页**内有效。
+       * 【安全修正】选中项只在**当前可见页**内有效，且必须**当前可删除**。
        *
        * 旧行为：`selected` 是跨页/跨筛选累积的。用户在「可删除」筛选下勾 20 行 →
        * 改成「运行中」筛选（或不带筛选翻页）→ 表格里已经看不到那些行了，
        * 但工具条仍显示「已选 20 个 / 删除所选（20）」，点下去就把**看不见的会话**删了。
        * 对一个不可逆操作来说，这是不能接受的：用户无法复核自己正在删什么。
        *
-       * 现在只承认「既被勾选、又在当前页、且当前可删除」的 id。
-       * 视图一变，越界的勾选自动失效（下方 effect 同步清理 state，避免计数不一致）。
+       * 【实测修复 · M3】这里原来只查了 `visibleIds`，**没有**查 `deletable` ——
+       * 与上一段注释「且当前可删除」的承诺不符（注释说了，代码没做）。
+       * 后果：某行勾选时是空闲的，之后它开始运行（宿主 `running=true`），
+       * 刷新后该行仍在当前页、勾选仍有效，于是被提交进批量删除，
+       * 宿主逐条返回 `refused` —— 用户看到一个费解的「部分失败」。
+       *
+       * 现在按注释兑现：`deletableIds` 只收当前页**且 Host 判定可删除**的行。
+       * 运行中的行会自动从选中集里掉出去，不会进入请求。
        */
       const visibleIds = new Set(items.map((row) => row.sessionId));
       const visibleKey = items.map((row) => row.sessionId).join("|");
-      const effectiveSelectedIds = selectedIds.filter((id) => visibleIds.has(id));
+      const deletableIdSet = new Set(deletableOnPage.map((row) => row.sessionId));
+      // 可删除集合的指纹：用于让清理 effect 在「运行状态变了但可见 id 没变」时也重跑。
+      const deletableKey = deletableOnPage.map((row) => row.sessionId).join("|");
+      const effectiveSelectedIds = selectedIds.filter(
+        (id) => visibleIds.has(id) && deletableIdSet.has(id),
+      );
       const hiddenSelectedCount = selectedIds.length - effectiveSelectedIds.length;
 
       React.useEffect(() => {
-        // 视图变化后把不再可见/不可选的勾选真正清掉，保证 UI 计数与可删集合一致。
+        // 视图变化后把不再可见/不可删除的勾选真正清掉，保证 UI 计数与可删集合一致。
+        // 【M3 配套】这里也必须查 deletable —— 否则 `effectiveSelectedIds` 已经把它排除了
+        // （计数正确），但 `selected` 里仍留着该行；一旦它重新变为可删除，
+        // 勾选会「自己复活」，与「视图一变勾选即失效」的承诺不符。
         setSelected((prev) => {
           let changed = false;
           const next = {};
           for (const [id, on] of Object.entries(prev)) {
             if (on !== true) continue;
-            if (visibleIds.has(id)) next[id] = true;
+            if (visibleIds.has(id) && deletableIdSet.has(id)) next[id] = true;
             else changed = true;
           }
           return changed ? next : prev;
         });
-      }, [visibleKey]);
-
-      const doDelete = async (sessionIds) => {
-        if (sessionIds.length === 0) return;
-        setBusy({ done: 0, total: sessionIds.length });
-        setResult(null);
-
-        // 【实测修正】原来这里是 `for (const id of sessionIds) await requestDelete(id)` ——
-        // 逐条发 N 个请求。配上当时按条数计费的限流（默认 10/分），勾选 50 行必死：
-        // 前 10 条成功，其余全部 429。现在**一次批量请求**交给 Host，
-        // Host 端逐条复用同一个 service 实现（R-50），语义完全一致但只算一次配额。
-        const body = await requestDeleteMany(sessionIds);
-        setBusy(null);
-
-        if (body.ok === true) {
-          const value = body.value ?? {};
-          const outcomes = Array.isArray(value.outcomes) ? value.outcomes : [];
-          setResult({
-            total: value.total ?? sessionIds.length,
-            ok: value.ok ?? 0,
-            fail: value.fail ?? 0,
-            partial: value.partial ?? 0,
-            files: value.files ?? 0,
-            failures: outcomes
-              .filter((o) => o.ok !== true)
-              .map((o) => ({ sessionId: o.sessionId, error: o.error ?? { code: "internal" } })),
-          });
-        } else {
-          // 整批被拒（如 429 限流 / 403 跨站）—— 原样透出原因，不谎报部分成功。
-          setResult({
-            total: sessionIds.length,
-            ok: 0,
-            fail: sessionIds.length,
-            partial: 0,
-            files: 0,
-            failures: [{ sessionId: "", error: body.error ?? { code: "internal" } }],
-          });
-        }
-        // 失败的行保留勾选，方便直接重试；成功的清掉。
-        setSelected((prev) => {
-          const next = { ...prev };
-          if (body.ok === true) {
-            for (const outcome of body.value?.outcomes ?? []) {
-              if (outcome.ok === true) delete next[outcome.sessionId];
-            }
-          }
-          return next;
-        });
-        setReloadTick((n) => n + 1);
-      };
+        // 依赖里带上「可删除集合」的指纹：会话的运行状态变化会刷新列表，
+        // 此时即便可见 id 未变，可删除集合也可能变了，必须重跑清理。
+      }, [visibleKey, deletableKey]);
 
       // ── 筛选区（等宽网格）──
       // 用 CSS Grid 定列（标签列定宽 + 控件列定宽），所有行标签右对齐、下拉等宽 —— 天然整齐。
@@ -1482,7 +1482,7 @@ window.__ModuleLoader__.load({
           {
             type: "button",
             className: "dscc-btn",
-            disabled: deletableOnPage.length === 0 || busy !== null,
+            disabled: deletableOnPage.length === 0,
             title: t("panel.selectAllHint"),
             onClick: () => {
               const next = { ...selected };
@@ -1505,7 +1505,7 @@ window.__ModuleLoader__.load({
         effectiveSelectedIds.length > 0
           ? h(
               "button",
-              { type: "button", className: "dscc-btn", disabled: busy !== null, onClick: () => setSelected({}) },
+              { type: "button", className: "dscc-btn", onClick: () => setSelected({}) },
               t("panel.clearSelection"),
             )
           : null,
@@ -1515,7 +1515,6 @@ window.__ModuleLoader__.load({
               {
                 type: "button",
                 className: "dscc-btn dscc-btn-danger",
-                disabled: busy !== null,
                 onClick: () => setDialog({
                   sessionId: effectiveSelectedIds.join("、"),
                   displayTitle: t("panel.selected", { count: effectiveSelectedIds.length }),
@@ -1525,33 +1524,14 @@ window.__ModuleLoader__.load({
                   bulkIds: effectiveSelectedIds,
                 }),
               },
-              t("panel.deleteSelected", { count: effectiveSelectedIds.length }),
-            )
+              t("panel.deleteSelected", { count: effectiveSelectedIds.length }),            )
           : null,
-        busy !== null ? h("span", { className: "dscc-panel-count" }, t("panel.busy", busy)) : null,
       );
 
-      // ── 结果条 ──
-      const resultBar =
-        result !== null
-          ? h(
-              "div",
-              { className: "dscc-panel-result", role: "status" },
-              h("strong", null, t("panel.resultTitle")),
-              h("span", null, t("panel.resultOk", { ok: result.ok })),
-              result.fail > 0 ? h("span", { className: "dscc-panel-fail" }, t("panel.resultFail", { fail: result.fail })) : null,
-              result.partial > 0 ? h("span", null, t("panel.resultPartial", { count: result.partial })) : null,
-              h("span", null, t("panel.resultFiles", { count: result.files })),
-              ...result.failures.slice(0, 5).map((failure) =>
-                h(
-                  "div",
-                  { key: failure.sessionId, className: "dscc-panel-fail" },
-                  `${failure.sessionId}: ${failure.error?.message ?? failure.error?.code ?? ""}`,
-                ),
-              ),
-              h("button", { type: "button", className: "dscc-btn", onClick: () => setResult(null) }, t("panel.resultClose")),
-            )
-          : null;
+      // 【H2/M4 已删除「结果条」】面板级 `result` 从来不会被写入（只由已删除的
+      // `doDelete` 写），所以这条结果条永远渲染 null。批量结果现在由确认弹窗
+      // 自己展示（DeleteDialog 的 state.result / bulk 分支）。
+      // 相关的 CSS 与文案键一并保留在字典里，避免其它入口引用时缺键。
 
       // ── 表格 ──
       let tableBody;
@@ -1606,8 +1586,8 @@ window.__ModuleLoader__.load({
                 type: "checkbox",
                 className: "dscc-row-check",
                 checked: selected[row.sessionId] === true,
-                disabled: !row.deletable || busy !== null,
-                "aria-label": `${t("panel.deleteOne")} ${row.title ?? row.sessionId}`,
+                disabled: !row.deletable,
+                "aria-label": `${t("panel.deleteOne")} ${row.title || row.sessionId}`,
                 onChange: (event) => {
                   const next = { ...selected };
                   if (event.target.checked) next[row.sessionId] = true;
@@ -1647,7 +1627,10 @@ window.__ModuleLoader__.load({
                   {
                     type: "button",
                     className: "dscc-btn dscc-btn-small dscc-row-actions",
-                    disabled: !row.deletable || busy !== null,
+                    disabled: !row.deletable,
+                    // 【可访问性】每行的删除按钮必须能读出「删哪一个」，
+                    // 否则一屏里全是同名的「删除」，屏幕阅读器无法区分。
+                    "aria-label": `${t("panel.deleteOne")} ${row.title || row.sessionId}`,
                     title: row.blockedReason ?? "",
                     onClick: () =>
                       setDialog({
@@ -1731,7 +1714,6 @@ window.__ModuleLoader__.load({
         ),
         toolbar,
         bulk,
-        resultBar,
         tableBody,
         pager,
       );

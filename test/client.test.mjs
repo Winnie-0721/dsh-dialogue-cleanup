@@ -574,31 +574,67 @@ test("面板多选：删除目标必须收敛到当前可见页（回归：不�
  * 这里做结构断言（不渲染组件）：批量路径只能调用 requestDeleteMany，
  * 且 doDelete 体内不得出现调用单条 requestDelete 的循环。
  */
-test("面板批量删除：只发一次 requestDeleteMany，不再逐条打 N 个请求（回归）", async () => {
+/**
+ * 批量删除必须走**一次** `requestDeleteMany`，不得退化成 N 个请求。
+ *
+ * 旧实现在内联 `doDelete` 里 `for (const id of sessionIds) await requestDelete(id)` ——
+ * 逐条发 N 个请求。配上当时**按条数计费**的限流（默认 10/分），勾选 50 行必然大面积失败：
+ * 前 10 条成功、其余 429。这是「删除逻辑有问题」的头号成因。
+ *
+ * 【H2 修正】旧测试锚在 `doDelete` 上 —— 但 `doDelete` **从未被调用**，
+ * 面板走的是「删除所选 → 打开确认弹窗 → DeleteDialog.run()」。
+ * 也就是说旧测试在保护**死代码**，给出假信心。现在锚到真正执行的 `run()`。
+ *
+ * 注意：`run()` 里**单条**删除走 `requestDelete` 是**正确设计**（信息最具体）；
+ * 只有**批量**分支才必须用一次 `requestDeleteMany`。断言按此分工写。
+ */
+test("面板批量删除：批量分支只发一次 requestDeleteMany（回归，锚活路径 run()）", async () => {
   const source = await readFile(CLIENT_PATH, "utf8");
 
-  const start = source.indexOf("const doDelete");
-  assert.ok(start > 0, "必须能找到 doDelete 实现");
-  // 取到下一个顶层注释段落为止，作为 doDelete 的函数体范围。
-  // （原来锚在「顶部工具条」注释上，筛选卡重命名后改成锚「筛选卡」。）
+  const start = source.indexOf("const run = async () => {");
+  assert.ok(start > 0, "必须能找到 DeleteDialog 的 run()（真正被执行的删除路径）");
+
+  // 取到函数体结束（下一个顶层注释段落「设置页 section」或工具条）为止。
   const rest = source.slice(start + 1);
-  const nextMark = rest.indexOf("\n      // ── 筛选区");
-  assert.ok(nextMark > 0, "doDelete 之后应当是筛选卡注释");
-  // 必须先剥掉注释：doDelete 内部就有一段说明「旧实现逐条调用 requestDelete」的注释，
-  // 直接扫原文会把注释里的示例代码误判成真实调用。
+  const endMarks = ["\n      // ── 筛选区", "\n      // ── 顶部工具条", "\n      // ── 表格"];
+  const ends = endMarks.map((m) => rest.indexOf(m)).filter((i) => i > 0);
+  assert.ok(ends.length > 0, "run() 之后应当能找到一个段落边界");
   const body = rest
-    .slice(0, nextMark)
+    .slice(0, Math.min(...ends))
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/(^|[^:])\/\/.*$/gm, "$1");
 
-  assert.ok(/requestDeleteMany\s*\(/.test(body), "批量必须调用 requestDeleteMany");
-  assert.equal(
-    /requestDelete\s*\(/.test(body),
-    false,
-    "doDelete 内不得再调用单条 requestDelete（那会退化成 N 个请求）",
-  );
-  // 只允许调用一次批量端点。doDelete 里可以有 for...of（那是在做本地选中状态清理），
-  // 但**发请求**的调用必须只有一次，否则又变成 N 个请求。
+  // 批量分支必须存在且只发一次批量请求。
   const sendCount = (body.match(/requestDeleteMany\s*\(/g) ?? []).length;
-  assert.equal(sendCount, 1, `批量端点只能调用一次，实际 ${sendCount} 次`);
+  assert.equal(sendCount, 1, `批量端点必须恰好调用一次，实际 ${sendCount} 次`);
+  // 单条分支允许调用 requestDelete（信息更具体），但**不得有循环**。
+  assert.equal(
+    /for\s*\([^)]*\)\s*\{[^}]*requestDelete\s*\(/.test(body),
+    false,
+    "run() 内不得出现「循环里逐条 requestDelete」——那正是旧的 N 请求缺陷",
+  );
+  // 明确的批量入口：`ids.length > 1` 时必须走批量端点，而不是逐条。
+  assert.match(body, /requestDeleteMany\s*\(\s*ids\s*\)/, "批量必须把整个 ids 一次交给 Host");
+});
+
+test("面板删除：内联 doDelete 死代码必须已删除（H2 回归）", async () => {
+  const source = await readFile(CLIENT_PATH, "utf8");
+  // `doDelete` 从未被任何 onClick/effect 调用，它自带一套 busy/result state 与结果条，
+  // 与弹窗路径重复。留着会让「面板批量删除」看起来有两条路径，实际只有一条。
+  assert.equal(
+    source.includes("const doDelete"),
+    false,
+    "内联 doDelete 死代码必须已删除（面板走 DeleteDialog.run()）",
+  );
+  // 同理：面板级 busy/result state 与结果条不得复活（它们只被死代码写入）。
+  assert.equal(
+    /const \[busy, setBusy\]/.test(source),
+    false,
+    "面板级 busy state 不得复活（恒为 null 的假状态）",
+  );
+  assert.equal(
+    source.includes("resultBar"),
+    false,
+    "面板级结果条不得复活（恒为 null 的假 UI）",
+  );
 });
