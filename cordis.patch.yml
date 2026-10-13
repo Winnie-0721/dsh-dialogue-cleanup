@@ -1,0 +1,11 @@
+# dsh-dialogue-cleanup bundle patch.
+#
+# inject 让 Cordis 等 webServer 就绪后再激活本插件；少了它，apply() 可能在
+# webServer 存在之前跑，POST 路由注册不上，客户端会拿到 404。
+#
+# 注意：匹配到的 override 会替换**整个** config，所以用户的覆盖层必须写全。
+- insert:
+    - id: dialogue-cleanup
+      name: 'dsh-dialogue-cleanup'
+      inject:
+        - webServer

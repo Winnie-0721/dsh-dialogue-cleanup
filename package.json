@@ -1,0 +1,69 @@
+{
+  "name": "dsh-dialogue-cleanup",
+  "version": "1.0.0",
+  "description": "Delete DeepSeek Harness sessions from the running Web runtime: detach the live store entry, drop workspace records, and remove the on-disk artifacts. Host half plus a web client half in one package.",
+  "keywords": [
+    "deepseek",
+    "harness",
+    "dsh",
+    "plugin",
+    "session",
+    "delete",
+    "cleanup",
+    "cleaner"
+  ],
+  "license": "MIT",
+  "author": "Winnie-0721",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Winnie-0721/dsh-dialogue-cleanup.git"
+  },
+  "homepage": "https://github.com/Winnie-0721/dsh-dialogue-cleanup#readme",
+  "bugs": {
+    "url": "https://github.com/Winnie-0721/dsh-dialogue-cleanup/issues"
+  },
+  "type": "module",
+  "main": "lib/index.js",
+  "meta": {
+    "title": "Dialogue Cleanup",
+    "description": "Delete a session from the running Web UI: live store, workspace records, and on-disk artifacts."
+  },
+  "icon": "./icon.svg",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "test": "node --test \"test/**/*.test.mjs\"",
+    "check": "node --check lib/index.js && node --check lib/config.js && node --check lib/artifacts.js && node --check lib/audit.js && node --check lib/service.js && node --check lib/http.js && node --check client.js"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-workspace",
+        "@deepseek-ai/dsh-client-locale"
+      ]
+    }
+  },
+  "files": [
+    "lib",
+    "client.js",
+    "cordis.patch.yml",
+    "locale",
+    "icon.svg",
+    "README.md",
+    "README.zh.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ]
+}

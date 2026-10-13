@@ -1,0 +1,13 @@
+# 依赖（本项目零运行时依赖，这个目录只在本地跑测试/装工具时出现）
+node_modules/
+
+# 编辑器与系统噪声
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+Desktop.ini
+
+# 日志与临时文件
+*.log
+*.tmp

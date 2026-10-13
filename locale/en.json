@@ -1,0 +1,4 @@
+{
+  "title": "Dialogue Cleanup",
+  "description": "Delete a session from the running Web UI: live store entry, workspace records, and on-disk artifacts."
+}

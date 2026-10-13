@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Dialogue Cleanup">
+  <g fill="none" stroke="#247bbf" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="12" y="14" width="40" height="30" rx="5"/>
+    <path d="M12 24h40"/>
+    <path d="M22 32h8"/>
+    <path d="M22 38h14"/>
+    <path d="M38 44v10"/>
+    <path d="M31 48l7 7 7-7"/>
+  </g>
+</svg>
