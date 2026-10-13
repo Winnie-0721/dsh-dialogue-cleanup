@@ -4,6 +4,77 @@
 
 首次发布（未对外发布前的迭代都并入本条目）。
 
+### 复刻 dsh-plugin-market 的打包发布流程
+
+用户：「复刻我的另一个插件 dsh-plugin-market 下的打包流程」。
+
+照搬的是**结构**（版本规则 / 门槛 / CI 链路），不是逐字复制 —— 两个仓库的形状不同，
+照抄会坏，所以逐项适配并写进了 `docs/RELEASING.md`。
+
+**新增**：
+
+| 文件 | 作用 |
+|---|---|
+| `scripts/release.ps1` | 版本递增 + 门槛 + CI 打包/建 Release（本地不留任何产物） |
+| `.github/workflows/pack-release.yml` | 标签推送 → 门槛 → `pnpm pack` → GitHub Release 附件 |
+| `.github/workflows/publish-npm.yml` | **唯一**的 npm 发布实现（OIDC Trusted Publishing + 暂存发布） |
+| `.gitattributes` | 行尾与 BOM 约定（`.ps1` 要 CRLF；带中文的 `.ps1` 要有 UTF-8 BOM） |
+| `docs/RELEASING.md` | 版本号规则、适配点、npm 两个坑 |
+| `test/release-workflow.test.mjs` | 发布工作流回归（反向断言「发布只能由 publish-npm.yml 亲自执行」） |
+| `test/ps-script.test.mjs` | `.ps1` 的 BOM 与 `Get-Content -Encoding UTF8` 约定 |
+
+**设计要点**（都来自参考仓库踩过的真坑，不是推测）：
+
+- **本地只做版本与门槛，打包与发布全在 CI**：本地不产生打包产物、不消耗 gh/npm token；
+  `dist/` 已进 `.gitignore`。
+- **版本算术与档位判定每次发布都自检**：判例表 + 负向对照。版本号一旦发布就改不回来，
+  所以这两条规则做成每次必跑的断言，而不是注释里的约定。
+- **npm 发布只能由 `publish-npm.yml` 亲自执行**：npm 的 Trusted Publisher 按 OIDC 里的
+  `job_workflow_ref` **文件名**匹配，而 `workflow_call` 下它指向**被调用**的文件 ——
+  所以 `pack-release.yml` 必须 `uses:` 复用，自己写一遍会让令牌文件名变成
+  `pack-release.yml` 并直接 `ENEEDAUTH`。参考仓库为此连挂两次（v1.1.6 / v1.2.0），
+  本仓库用反向断言钉住这条底线。
+- **两个 npm 坑**已写进 workflow 注释：不要 `npm@latest`（npm 12 与 node 22.14 不相容
+  → EBADENGINE）、不给 `setup-node` 写 `registry-url`（会注入无效 token 盖过 OIDC）。
+
+**逐项适配（照抄会坏的地方）**：
+
+| 项 | dsh-plugin-market | 本仓库 |
+|---|---|---|
+| 包的位置 | `plugin-market/` 子目录 | **仓库根** |
+| 客户端 bundle | `lib/client.js` | **`client.js`** |
+| 回归测试 | `verify/*.test.mjs` | **`test/*.test.mjs`** |
+| npm 发布 job | 需 `working-directory: plugin-market` | **不能设**（会 ENOENT） |
+
+**顺带修掉一个真缺陷**：`lib/index.js` 原本把版本**写死**成 `export const version = "1.0.0"`。
+复刻后第一次 `-Bump patch` 就会被新门槛当场拦下（「lib/ 的非注释行里仍写着旧版本号」），
+而且 `/status` 与面板会**永久**显示 1.0.0。改为从包清单读
+（`createRequire(import.meta.url)("../package.json").version`，与参考仓库同范式）。
+已实测验证：临时把 version 改成 9.9.9 → 导出跟着变；还原 → 回到 1.0.0。
+
+**验证**（不只是「测试绿」）：
+
+- 单测 **148 → 156**（新增 8 条：发布工作流 6 + `.ps1` 约定 2）；
+- `scripts/release.ps1 -LocalOnly` 在真实仓库里 **exit=0**，8 套测试全绿；
+- **端到端实跑**（在临时 clone 里，不动真实仓库）：
+  - `-Bump auto` 正确把 `feat` 判为 minor，并在 CHANGELOG 缺声明时给出可执行出路；
+  - 声明 1.2.0 但证据是 patch → **拒绝**（双向硬拦），报错列明档位与两条出路；
+  - 声明与证据一致 → **放行**：1.0.0 → 1.1.0（versionCode 10100）、提交、打标签，
+    且 `lib/index.js` 导出的版本**跟着变成 1.1.0**；
+  - 重跑同一版本 → 可重入（标签已在历史且发布面未变）；
+  - 发布面有未提交改动 → 拒绝（这条在实跑中**真的触发了一次**，拦住了我自己的测试脚本）。
+- **变异测试**：把 5 条防线逐一破坏（pack-release 自己跑 npm 发布 / 去掉幂等条件 /
+  照抄 `working-directory` / 去掉 `.ps1` 的 BOM / `Get-Content` 漏写 `-Encoding`），
+  **5/5 都被对应断言拦下**；原样对照全绿（证明不是环境坏了才红）。
+
+**过程中我自己踩的坑（如实记录）**：
+
+1. BOM 被编辑工具抹掉过 —— `scripts/release.ps1` 含大量中文，无 BOM 时
+   Windows PowerShell 5.1 会按 ANSI 解码并直接解析坏。当场发现并补回，
+   随后写了 `test/ps-script.test.mjs` 钉住。
+2. `cordis.patch.yml` 的门禁一开始只认不带引号的 `name:`，而本仓库写的是带单引号的
+   `name: 'dsh-dialogue-cleanup'`。**改的是门禁**（YAML 两种写法等价），不是去迁就检查器。
+
 ### 改名：`dsh-session-cleaner-clone` → `dsh-dialogue-cleanup`
 
 包名与内部标识一次性统一改名。**上游参考项目不得被改**，已用脚本断言校验

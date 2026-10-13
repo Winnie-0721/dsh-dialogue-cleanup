@@ -1,0 +1,23 @@
+# 行尾与编码约定。与 dsh-plugin-market 保持同一套口径。
+#
+# 为什么值得一个文件：这一层差异会让「本地绿、CI 红」——
+# 例如 .ps1 若被归一化成 LF 且丢了 BOM，Windows PowerShell 5.1 会按 ANSI 解码中文，
+# 直接把脚本解析坏（那个仓库真的发生过一次，发布因此中断）。
+* text=auto
+
+# 图片按二进制处理，避免行尾/编码转换破坏内容
+*.png binary
+*.jpg binary
+*.ico binary
+
+# PowerShell 脚本在 Windows 上用 CRLF；其中带中文的 .ps1 依赖 UTF-8 BOM 才能被 PS 5.1
+# 正确解析，该 BOM 属于文件内容，不会被行尾归一化去掉。
+*.ps1 text eol=crlf
+
+*.js text eol=lf
+*.mjs text eol=lf
+*.cjs text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.md text eol=lf

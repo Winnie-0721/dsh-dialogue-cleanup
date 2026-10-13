@@ -146,8 +146,30 @@ dsh-dialogue-cleanup/
 │   ├── artifacts.js      disk removal + path containment
 │   ├── http.js           same-origin, body limits, status codes
 │   └── audit.js          JSONL audit trail
-└── test/                 147 unit/contract/render tests
+├── scripts/
+│   └── release.ps1       version bump + gate (+ CI pack/release)
+├── .github/workflows/    pack-release.yml + publish-npm.yml
+├── docs/RELEASING.md     versioning rules and the release pipeline
+└── test/                 156 unit/contract/render/release tests
 ```
+
+## Releasing
+
+Tag-driven, fully automated in GitHub Actions — no local build artifacts, no gh/npm tokens
+spent locally.
+
+```powershell
+pwsh -File scripts\release.ps1 -LocalOnly      # gate only (no version change, no publish)
+pwsh -File scripts\release.ps1 -Bump auto      # gate → bump → commit → tag → push
+```
+
+Pushing a `v*` tag triggers **Pack and Release**: gate → `pnpm pack` → GitHub Release
+(with tarball + `version.json` attachments) → npm via OIDC Trusted Publishing.
+
+See [docs/RELEASING.md](docs/RELEASING.md) for the versioning rules, the
+`dsh-plugin-market` → this repo adaptation points, and the two npm pitfalls
+(`npm@latest` + node 22.14, and why the publish step must stay inside
+`publish-npm.yml`).
 
 ## License
 
