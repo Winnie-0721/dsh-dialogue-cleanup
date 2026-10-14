@@ -174,6 +174,35 @@ test('发布工作流：OIDC 身份自检排在发布之前', () => {
   assert.ok(selfCheck < guard, '自检应在幂等闸门之前——这样即使会跳过，也能早早证明身份正确')
 })
 
+test('发布工作流：令牌交换自检必须存在，且排在发布之前', () => {
+  // 【为什么值得一条测试】npm 在令牌交换失败时**静默降级**：
+  // lib/utils/oidc.js 的 catch 分支只写 verbose 日志就 return undefined，
+  // 于是 publish 退化成未认证请求，最终只甩一句 ENEEDAUTH / need auth。
+  // 真实原因（信任配置与仓库/文件名不匹配）被完全吞掉 —— 本项目就这么被坑过一次。
+  // 所以加了一步「主动交换并把 registry 响应原样打印」的自检。
+  const publish = read('publish-npm.yml')
+  const step = stepBlock(publish, '自检 OIDC 令牌交换（把静默的 ENEEDAUTH 变成具体原因）')
+
+  assert.match(step, /token\/exchange\/package\//, '要真的调用令牌交换端点')
+  assert.match(step, /ACTIONS_ID_TOKEN_REQUEST_URL/, '要请求 OIDC 令牌')
+  assert.match(step, /HTTPError/, '要捕获失败响应并打印 body —— 否则又变成静默')
+  assert.match(step, /registry 响应/, '要把 registry 的响应体打出来')
+
+  // 只读：不得在这一步里发布任何东西。
+  assert.equal(
+    /npm\s+(stage\s+)?publish/.test(step),
+    false,
+    '令牌交换自检必须是只读的，不得顺带发布',
+  )
+
+  const exchangeCheck = publish.indexOf('自检 OIDC 令牌交换')
+  const guard = publish.indexOf('该版本已在 npm 则跳过')
+  const stage = publish.indexOf('Stage publish to npm')
+  assert.ok(exchangeCheck !== -1 && guard !== -1 && stage !== -1, '三个步骤都要存在')
+  assert.ok(exchangeCheck < stage, '令牌交换自检必须在 Stage publish 之前')
+  assert.ok(guard < exchangeCheck, '幂等闸门应排在前面：跳过时不必再做交换自检')
+})
+
 test('发布工作流：不许有第二份发布实现，也不许留探针', () => {
   const offenders = []
   for (const f of readdirSync(wfDir)) {

@@ -131,6 +131,60 @@ jobs:
       # （没有 `npm publish`），普通 `npm publish` 会被拒：
       #   403 OIDC permission denied for this action
       # 所以走暂存发布；之后需人工批准（`npm stage approve <id>`，要 2FA）才公开。
+      # **把「静默降级」变成一句看得懂的错。**
+      #
+      # 为什么需要这一步：npm 的 oidc() 在令牌交换失败时**只写 verbose 日志然后
+      # return undefined**（lib/utils/oidc.js 的 catch 分支），于是后续 publish 退化成
+      # 一个**未认证**请求，最终只甩一句：
+      #     npm error code ENEEDAUTH
+      #     npm error need auth This command requires you to be logged in to ...
+      # 看日志的人会以为「npm 抽风」或「权限没给」，而真实原因（信任配置不匹配、
+      # 仓库/文件名写错）被完全吞掉 —— 本项目就这么被坑过一次。
+      #
+      # 所以这里主动做一次同样的交换，把 registry 的响应体**原样打印**。
+      # 注意：与上面的「文件名自检」一样，这一步**只读**，不发布任何东西。
+      - name: 自检 OIDC 令牌交换（把静默的 ENEEDAUTH 变成具体原因）
+        if: steps.guard.outputs.skip == 'false'
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.error, urllib.request
+
+          base = os.environ.get("ACTIONS_ID_TOKEN_REQUEST_URL")
+          token = os.environ.get("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
+          if not base or not token:
+              raise SystemExit("拿不到 OIDC 请求地址/令牌")
+
+          req = urllib.request.Request(
+              base + "&audience=npm:registry.npmjs.org",
+              headers={"Authorization": "bearer " + token},
+          )
+          jwt = json.load(urllib.request.urlopen(req))["value"]
+
+          name = json.load(open("package.json"))["name"]
+          url = "https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/" + name
+          # User-Agent 要像 npm 客户端：registry 会对「不像客户端」的请求换一条分支。
+          ex = urllib.request.Request(
+              url, method="POST",
+              headers={
+                  "Authorization": "Bearer " + jwt,
+                  "user-agent": "npm/11.21.0 node/v22.14.0 linux x64 workspaces/false",
+              },
+          )
+          try:
+              r = urllib.request.urlopen(ex)
+              body, status = r.read().decode(), r.status
+          except urllib.error.HTTPError as e:
+              body, status = e.read().decode(), e.code
+
+          print(f"token exchange -> HTTP {status}")
+          print("registry 响应：" + body[:600])
+          if status >= 300:
+              print("::warning title=OIDC 令牌交换被拒::上面就是 registry 给出的原因；"
+                    "通常意味着 npm 上的 Trusted Publisher 与本次仓库/工作流文件名不匹配。")
+          else:
+              print("::notice title=OIDC 令牌交换成功::信任配置匹配，接下来可以发布。")
+          PY
+
       - name: Stage publish to npm
         if: steps.guard.outputs.skip == 'false'
         run: npm stage publish --access public
