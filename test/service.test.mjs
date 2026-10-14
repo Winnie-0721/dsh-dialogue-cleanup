@@ -357,3 +357,109 @@ test("批量删除：探测次数从 O(N) 降为 O(1)（runningProbeTtlMs 回归
   const strict = await runBatch(10, 0);
   assert.equal(strict.controllerListCalls, 10, "ttl=0 时必须每条都重新探测");
 });
+
+/**
+ * 「删掉后又出现在未分组」的回归。
+ *
+ * ─── 官方侧栏为什么会显示「未分组」─────────────────────────────────────────
+ * `@deepseek-ai/dsh-client-ui-workspace/lib/client.js` 的 `groupByWorkspace`：
+ *   1. 遍历每个 workspace 的 `sessionIds`，命中的记入 `accounted`；
+ *   2. 「在会话列表 `list.ids` 里、却不在 `accounted` 里」的行收进 `stray`，
+ *      渲染为标题 `group.ungrouped`（中文「未分组」）的那一组。
+ *
+ * 所以「先摘工作区归属、但会话仍留在宿主内存/列表里」= 亲手制造一条
+ * 跑到「未分组」下的幽灵行。下面的断言把这条因果锁死：
+ *   · 内存里还留着它 → **不得**摘归属（否则就会落进 stray）；
+ *   · 内存里确实没了 → 才允许摘归属（正常收尾）。
+ *
+ * 反向验证（变异测试）：把 `stillInLiveStore` 判断去掉、无条件摘归属，
+ * 「内存里还在时不得摘归属」这条必然失败。
+ */
+test("回归：会话仍在宿主内存里时**不得**摘工作区归属（否则会出现在「未分组」）", async () => {
+  const { __resetInFlight } = await import("../lib/service.js");
+  __resetInFlight();
+
+  const sessionId = "session-keep-group";
+  let detachedCalls = 0;
+  let unarchiveCalls = 0;
+
+  const services = {
+    sessionController: { list: async () => ({ items: [{ sessionId, running: false, blank: false }] }) },
+    agents: { get: () => undefined },
+    // 内存里**仍然**有它（detachLiveStore 找不到任何 store → 摘不掉）
+    sessions: { list: () => [{ id: sessionId }] },
+    workspaceRegistry: {
+      list: () => [{ sessionIds: [sessionId], detachSession: async () => { detachedCalls += 1; } }],
+      unpinSession: async () => { unarchiveCalls += 1; },
+      unarchiveSession: async () => { unarchiveCalls += 1; },
+    },
+  };
+  const ctx = { logger: { warn() {}, debug() {} }, get: (k) => services[k] };
+  const audit = { record: async () => ({ ok: true, path: null }), enabled: false, path: null };
+  const service = createService(
+    ctx,
+    resolveConfig({ audit: false, matchAlternateIdSpelling: false }),
+    audit,
+  );
+
+  const result = await service.deleteSession(sessionId, { kind: "test" });
+  assert.equal(result.ok, true);
+  assert.equal(result.value.detached, false, "内存条目摘不掉时如实上报 false");
+  assert.equal(result.value.keptWorkspaceMembership, true, "必须标记归属被保留");
+  assert.equal(detachedCalls, 0, "会话还在内存里 → **不得**摘归属（否则会落到「未分组」）");
+  assert.equal(unarchiveCalls, 0, "同理不动注册表，避免留下指向内存行的 pin/archive");
+  assert.equal(result.value.workspaces, 0);
+});
+
+test("回归：会话确实已从宿主内存消失时才摘归属（正常收尾）", async () => {
+  const { __resetInFlight } = await import("../lib/service.js");
+  __resetInFlight();
+
+  const sessionId = "session-gone";
+  let detachedCalls = 0;
+
+  const services = {
+    // 语料里已经没有它
+    sessionController: { list: async () => ({ items: [] }) },
+    agents: { get: () => undefined },
+    // 内存里也没有它（store 可达且为空 → detachLiveStore 报 false，但集合里本就没有）
+    sessions: { list: () => [] },
+    workspaceRegistry: {
+      list: () => [{ sessionIds: [sessionId], detachSession: async () => { detachedCalls += 1; } }],
+      unpinSession: async () => {},
+      unarchiveSession: async () => {},
+    },
+  };
+  const ctx = { logger: { warn() {}, debug() {} }, get: (k) => services[k] };
+  const audit = { record: async () => ({ ok: true, path: null }), enabled: false, path: null };
+  const service = createService(
+    ctx,
+    resolveConfig({ audit: false, matchAlternateIdSpelling: false }),
+    audit,
+  );
+
+  const result = await service.deleteSession(sessionId, { kind: "test" });
+  assert.equal(result.ok, true);
+  assert.equal(result.value.keptWorkspaceMembership, false, "内存里没有它 → 不必保留归属");
+  assert.equal(detachedCalls, 1, "确实不在内存里 → 正常摘归属收尾");
+  assert.equal(result.value.workspaces, 1);
+});
+
+test("detachLiveStore：遍历候选 store 承载位置，且只认 Map 语义", () => {
+  // _store 兜底位置
+  let called = 0;
+  const alt = new Map([["s1", { detach: () => { called += 1; } }]]);
+  assert.equal(detachLiveStore({ _store: alt }, "s1"), true);
+  assert.equal(called, 1);
+
+  // 非 Map 的假 store（只有 get）不得被当成 store 用
+  assert.equal(detachLiveStore({ store: { get: () => ({ detach() {} }) } }, "s1"), false);
+
+  // store 存在但没有这个 id → 如实 false（不谎报摘除成功）
+  assert.equal(detachLiveStore({ store: new Map() }, "s1"), false);
+
+  // 没有 detach 的裸 entry → 直接 store.delete 兜底
+  const bare = new Map([["s1", {}]]);
+  assert.equal(detachLiveStore({ store: bare }, "s1"), true);
+  assert.equal(bare.has("s1"), false, "裸 entry 也必须真的从 store 里删掉");
+});

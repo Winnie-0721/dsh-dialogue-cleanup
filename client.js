@@ -67,6 +67,7 @@ window.__ModuleLoader__.load({
         "done.title": "已删除会话",
         "done.detached": "内存条目已摘除",
         "done.detachedNo": "内存条目未摘除（降级：只删了磁盘）",
+        "done.keptGroup": "已保留它原有的工作区分组：会话仍在宿主内存里，此时摘掉归属会让它变成侧栏的「未分组」幽灵行。",
         "done.workspaces": "工作区记录：{count}",
         "done.files": "磁盘目录：{count}",
         "done.cache": "投影缓存：{count}",
@@ -165,6 +166,7 @@ window.__ModuleLoader__.load({
         "done.title": "Session deleted",
         "done.detached": "Live store entry detached",
         "done.detachedNo": "Live store entry NOT detached (degraded: disk only)",
+        "done.keptGroup": "Its workspace group membership was kept: the session is still in the host's live store, and detaching it now would leave a \"Ungrouped\" ghost row in the sidebar.",
         "done.workspaces": "Workspace records: {count}",
         "done.files": "On-disk directories: {count}",
         "done.cache": "Projection cache files: {count}",
@@ -991,6 +993,10 @@ window.__ModuleLoader__.load({
         const v = state.result;
         const rows = [];
         rows.push(h("li", { key: "detached" }, v.detached === true ? t("done.detached") : t("done.detachedNo")));
+        // 归属被**故意保留**时说明原因：这不是失败，而是为了不让该行变成「未分组」孤儿。
+        if (v.keptWorkspaceMembership === true) {
+          rows.push(h("li", { key: "keptGroup" }, t("done.keptGroup")));
+        }
         rows.push(h("li", { key: "ws" }, t("done.workspaces", { count: v.workspaces ?? 0 })));
         rows.push(h("li", { key: "files" }, t("done.files", { count: v.files ?? 0 })));
         if ((v.cacheFiles ?? 0) > 0) {
