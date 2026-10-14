@@ -551,63 +551,42 @@ window.__ModuleLoader__.load({
    所有行的标签右对齐、所有下拉等宽，天然整齐。
    原项目（@haoranwang0921/dsh-session-cleaner）的克制做法也是
    「少控件 + 固定宽度 + flex 卡片行」，不做花哨响应式。 */
+/* 筛选区：**外层就用网格**，两列 = [1fr 自适应宽的控件列] + [按钮列]。
+   为什么这样写（用户反馈「对齐输入框」）：
+   原来外层是 flex-direction: column，第 1 行（搜索+刷新）与第 2 行（筛选网格）
+   各自独占整宽。于是搜索框右边停在「刷新」按钮左边（实测 752px），
+   而筛选网格铺到卡片右内边（实测 840px）—— **右边界差 87.58px**，看着就是没对齐。
+
+   现在把「搜索框」与「筛选网格」放进**同一列**：
+     · .dscc-filters-row { display: contents } → 行容器不生成盒子，
+       搜索框与刷新按钮直接成为外层网格的两个格子（第 1 列 / 第 2 列）；
+     · .dscc-filters-grid { grid-column: 1 } → 筛选网格也占第 1 列。
+   两者同列 ⇒ **左右边界由布局保证一致**，不靠手调 padding 去凑。
+   （这比「给网格加一个等于按钮宽度的右内边距」稳：按钮文字变长变短都不受影响。）
+
+   ⚠ 注释里不能用反引号：CSS 在 JS 模板字符串里，一个反引号就提前终止模板串。
+   已因此踩坑多次，这条规则在本文件里反复出现，务必遵守。 */
 .dscc-filters {
-  display: flex; flex-direction: column; gap: 10px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
   padding: 12px 14px; border-radius: 10px;
   border: 1px solid var(--dsw-alias-border-l1);
   background: var(--dsw-alias-bg-layer-1);
 }
-/* 筛选区第 1 行：搜索框撑满，按钮**不参与收缩**。
-   【实测修复】原来只给输入框 flex:1 1 auto + min-width:0，按钮用默认的
-   flex-shrink:1，于是它被压到 min-content —— 中文可在任意字符处断行，
-   min-content 就是**一个字宽**，截图里「刷新」因此竖排成「刷／新」。
-   修法：按钮 flex:none（不收缩）+ white-space:nowrap（不许断行）。 */
-.dscc-filters-row { display: flex; align-items: center; gap: 8px; }
-/* 搜索框：在 flex 行里用 flex 分配宽度，**不要**用 width:100%
-   —— 通用 .dscc-input 是 width:100%（用于网格里的整列控件），
-   放进 flex 行会让它独占整行、把按钮挤到 min-content，文字因此竖排。
+/* 行容器不生成盒子 —— 它只为容纳「搜索框 + 按钮」而存在，本身不该占格子。 */
+.dscc-filters-row { display: contents; }
+/* 搜索框：占满所在列（第 1 列），宽度交给网格轨道决定。 */
+.dscc-input.dscc-filters-search { width: 100%; min-width: 0; }
 
-   【实测修复 · 级联（这条我自己写错过一次，必须记下来）】
-   曾经写的是 .dscc-filters-search { width: auto; } —— **它从未生效**。
-   两者都是单类选择器（优先级 0,1,0），而 .dscc-input { width: 100% }
-   在源码里**排在其后**，同优先级比顺序 ⇒ 100% 胜出。
-   也就是说当时注释里写的「width 交还给 auto」是假的。
-   （症状没暴露，是因为通用的 .dscc-input{width:100%} 配 .dscc-filters-row>
-   的 flex:none 恰好也没把按钮压扁 —— 但这属于巧合，不是设计。）
-
-   现在写成 .dscc-input.dscc-filters-search（优先级 0,2,0），
-   无论 .dscc-input 排在哪里都能稳定覆盖。
-   同文件里 .dscc-panel.dscc-panel-section 是同一个坑的另一例。
-
-   ⚠ 本段注释里不能用反引号（CSS 在 JS 模板字符串里）。已因此踩坑四次。 */
-.dscc-input.dscc-filters-search { flex: 1 1 auto; width: auto; min-width: 0; }
-/* 刷新按钮：不收缩 + 不折行。 */
-.dscc-filters-row > .dscc-btn { flex: none; }
-
-/* 筛选网格：标签列**定宽** + 控件列定宽，两列一组。
-   标签列若用 auto，左右两组的标签宽度会各自不同（「会话类型」比「项目」宽），
-   下拉的起始位置就会错开 —— 所以两列都定死。
-
-   【实测修复 · 中文表单的「分散对齐」】
-   标签字数不一：「会话类型」4 字，「项目/状态/归档/排序」2 字。
-   只做左对齐的话，2 字标签右边空一大块，看起来仍然没对齐；
-   右对齐则左边缘参差。中文表单的惯例（也是用户给的参考图）是
-   **两端顶格**：2 字标签把间距摊开，占满与 4 字标签相同的宽度。
-
-   实现要点：标签列宽 = 最长标签的自然宽度（4 字 × 12px = 48px），
-   然后 text-align: justify + text-align-last: justify。
-   text-align-last 是必需的 —— 标签只有一行，而 text-align: justify
-   默认**不对最后一行**生效，单行文本等于全是最后一行，不加它就不起作用。
-
-   ⚠ 本段注释里绝不能用反引号（Markdown 行内代码的写法）：
-   CSS 是放在 JS 模板字符串里的，一个反引号就会提前终止模板串，
-   导致整个 client.js 语法错误。已踩坑三次，故在此写明。 */
+/* 筛选网格：与搜索框**同列**，所以宽度天然一致；
+   控件列用 1fr 均分剩余宽度 —— 长文案（如「全部对话（显示已归档）」）不再被截断。 */
 .dscc-filters-grid {
+  grid-column: 1;
   display: grid;
-  grid-template-columns: 48px 152px 48px 152px;
+  grid-template-columns: 48px minmax(0, 1fr) 48px minmax(0, 1fr);
   align-items: center;
   gap: 8px 10px;
-  justify-content: start;
 }
 /* 字段：<label> 自身不生成盒子（display:contents），
    于是它的两个子节点（标签 span + select）**直接成为网格项** ——

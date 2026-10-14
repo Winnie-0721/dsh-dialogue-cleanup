@@ -683,14 +683,71 @@ test("渲染：筛选区用定宽网格 + 列表用卡片行（布局回归）",
 test("布局 CSS：筛选网格标签列与控件列都定宽，行内容可省略", async () => {
   const { readFile } = await import("node:fs/promises");
   const source = await readFile(CLIENT_PATH, "utf8");
-  const sheet = source.match(/const CSS = `([\s\S]*?)`;/)[1];
+  const raw = source.match(/const CSS = `([\s\S]*?)`;/)[1];
+  // 【必须先剥注释再断言】CSS 注释里会出现选择器的**示例写法**
+  // （例如解释排版时写「.dscc-filters-grid { grid-column: 1 }」）。
+  // 不剥注释的话，正则可能先匹配到注释里那份，于是
+  //   · 断言读到的是示例而不是真规则；
+  //   · 变异测试会「改真规则却不红」—— 假通过。
+  // 下面对所有 CSS 断言统一用这份注释已剥离的文本。
+  const sheet = raw.replace(/\/\*[\s\S]*?\*\//g, "");
+  assert.notEqual(sheet, raw, "CSS 里应当有注释（这份剥离是必要的）");
 
-  // 网格：两列都定宽（用 auto 会让左右两组的标签各自成宽，下拉起点错开）。
-  // 标签列宽 = 最长标签的自然宽度：4 字 × 12px = 48px。
+  // 【对齐输入框 · 布局不变量】
+  //
+  // 用户反馈「对齐输入框」。用真实组件树在真浏览器里量出的原始几何是：
+  //   搜索框   left=15  right=752.42   （右侧被「刷新」按钮占走）
+  //   筛选网格 left=15  right=840      ← 右边界差 87.58px
+  // 左边界本来就是齐的；不齐的是**右边界**：筛选网格铺满卡片，搜索框只到按钮左边。
+  //
+  // 修法不是去调 padding 凑数（按钮文字一长一短就又不齐），而是让两者**同列**：
+  //   .dscc-filters        → grid，两列 = [minmax(0,1fr)] [auto]
+  //   .dscc-filters-row    → display:contents（行容器不占格子）
+  //   .dscc-filters-grid   → grid-column:1（与搜索框同列）
+  // 于是左右边界由布局保证一致。用声明式断言钉住这条结构。
+  const filtersRule = /\.dscc-filters\s*\{([^}]*)\}/.exec(sheet);
+  assert.ok(filtersRule, "必须有 .dscc-filters 规则");
+  assert.match(
+    filtersRule[1],
+    /display:\s*grid/,
+    "筛选卡必须是网格（这样搜索框与筛选网格才能同列，右边界一致）",
+  );
+  assert.match(
+    filtersRule[1],
+    /grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto/,
+    "两列应为 [可收缩的主列] + [按内容宽的按钮列]",
+  );
+  assert.match(
+    sheet,
+    /\.dscc-filters-row\s*\{[^}]*display:\s*contents/,
+    "行容器必须 display:contents，否则它自成一格，搜索框与按钮无法与外层对齐",
+  );
+  // 【M1 变异发现的漏洞】原来这里写的是 /grid-column:\s*1/ —— 它**同时匹配**
+  // `grid-column: 1 / -1`（跨两列）。而跨列正是要防的回归：
+  // 网格一旦跨列，宽度就又和搜索框不一致了。所以值必须**锚定到分隔符**，
+  // 要求恰好是 1（后随 ; 或 }），并显式排除跨列写法。
+  const gridBlock = /\.dscc-filters-grid\s*\{([^}]*)\}/.exec(sheet);
+  assert.ok(gridBlock, "必须有 .dscc-filters-grid 规则");
+  assert.match(
+    gridBlock[1],
+    /grid-column:\s*1\s*(?:;|$)/m,
+    "筛选网格必须**只占第 1 列**（grid-column: 1）",
+  );
+  assert.equal(
+    /grid-column:\s*1\s*\/\s*-?\s*1/.test(gridBlock[1]),
+    false,
+    "不得跨列（grid-column: 1 / -1）—— 跨列会让宽度又与搜索框不一致",
+  );
+
+  // 网格：标签列定宽（用 auto 会让左右两组的标签各自成宽，下拉起点错开）；
+  // 控件列用 1fr 均分，长文案（「全部对话（显示已归档）」）不再被截断。
   const gridRule = /\.dscc-filters-grid\s*\{([^}]*)\}/.exec(sheet);
   assert.ok(gridRule, "必须有 .dscc-filters-grid 规则");
-  assert.match(gridRule[1], /grid-template-columns:\s*48px\s+152px\s+48px\s+152px/, "必须是 4 列定宽轨道");
-  assert.equal(/auto/.test(gridRule[1]), false, "标签列不得用 auto（会导致两组起点错开）");
+  assert.match(
+    gridRule[1],
+    /grid-template-columns:\s*48px\s+minmax\(0,\s*1fr\)\s+48px\s+minmax\(0,\s*1fr\)/,
+    "必须是 4 列：两组「定宽标签列 + 可伸缩控件列」",
+  );
 
   // 【中文字宽统一：分散对齐】
   // 标签字数不一（4 字「会话类型」vs 2 字「项目」），要在**同一列宽内两端顶格**。
@@ -703,26 +760,17 @@ test("布局 CSS：筛选网格标签列与控件列都定宽，行内容可省�
   assert.match(labelRule[1], /width:\s*100%/, "标签须占满定宽列，否则撑不开");
   assert.match(labelRule[1], /white-space:\s*nowrap/, "标签不得折行");
 
-  // 【按钮不许竖排】中文可在任意字符断行，被压到 min-content 就会竖排
+  // 【按钮不许竖排】中文可在任意字符断行，被压到 min-content 就会竖排。
+  // 现在按钮在网格的 [auto] 列里，宽度由内容决定，天然不会被压扁；
+  // 但 `white-space: nowrap` 这条防线要一直留着（它是那个 bug 的直接修复）。
   const btnRule = /\.dscc-btn\s*\{([^}]*)\}/.exec(sheet);
   assert.ok(btnRule, "必须有 .dscc-btn 规则");
   assert.match(btnRule[1], /white-space:\s*nowrap/, "按钮文字必须 nowrap（否则「刷新」会竖排）");
-  assert.match(
-    sheet,
-    /\.dscc-filters-row\s*>\s*\.dscc-btn\s*\{[^}]*flex:\s*none/,
-    "刷新按钮必须 flex:none（不被压缩）",
-  );
-  // 搜索框不能沿用 width:100%（那会把按钮挤到 min-content）。
-  //
-  // 【M2 回归 · 必须算级联，不能只看「声明存在」】
-  // 原来这里断言的是「.dscc-filters-search 规则里有 width:auto」—— 那条断言
-  // 一直通过，但**规则从未生效**：它和 .dscc-input 同为单类选择器（0,1,0），
-  // 而 .dscc-input 在源码里排在其后 ⇒ width:100% 胜出。
-  // 现在改为计算真正的胜出者（见下方 cascadeWinner 辅助）。
+  // 搜索框占满主列；宽度交给网格轨道，不要再回到 width:auto/flex-basis 那套。
   assert.equal(
     cascadeWinner(sheet, "dscc-input dscc-filters-search", "width"),
-    "auto",
-    "搜索框的 width:auto 必须**真的**胜出（不能只写在规则里被 .dscc-input 覆盖）",
+    "100%",
+    "搜索框必须占满所在列（右边界才能与筛选网格一致）",
   );
 
   // 【M1 回归】面板高度/内边距的覆盖同理必须真的生效。
