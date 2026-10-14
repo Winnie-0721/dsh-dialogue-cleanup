@@ -1,70 +1,145 @@
-# dsh-dialogue-cleanup
+<h1 align="center">dsh-dialogue-cleanup</h1>
 
-Delete a DeepSeek Harness session from the **running** Web runtime — live store entry,
-workspace records, and on-disk artifacts — from the session row's `...` menu.
+<p align="center"><strong>English</strong> · <a href="./README.zh.md">简体中文</a></p>
 
-This is a compliant re-implementation of the capability boundary of the npm package
-`dsh-session-cleaner@1.0.2`, not a copy of its implementation. See
-[README.zh.md](README.zh.md) for the Chinese version and the full rationale.
+<p align="center">
+  <a href="https://www.npmjs.com/package/dsh-dialogue-cleanup"><img alt="npm version" src="https://img.shields.io/npm/v/dsh-dialogue-cleanup?label=npm" /></a>
+  <a href="https://www.npmjs.com/package/dsh-dialogue-cleanup"><img alt="npm downloads" src="https://img.shields.io/npm/dt/dsh-dialogue-cleanup?label=downloads%20total" /></a>
+  <a href="https://github.com/Winnie-0721/dsh-dialogue-cleanup/releases/latest"><img alt="GitHub release" src="https://img.shields.io/github/v/release/Winnie-0721/dsh-dialogue-cleanup" /></a>
+  <a href="https://github.com/Winnie-0721/dsh-dialogue-cleanup/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/Winnie-0721/dsh-dialogue-cleanup" /></a>
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-yellow.svg" /></a>
+  <a href="https://github.com/deepseek-ai/deepseek-harness"><img alt="DeepSeek Harness 0.2.0-rc.2" src="https://img.shields.io/badge/DeepSeek%20Harness-0.2.0--rc.2-blue" /></a>
+</p>
 
-## Two entry points (both official slots; neither touches the DOM)
+<p align="center"><strong>Delete DeepSeek Harness sessions from the running Web GUI — without restarting, without leaving the window.</strong></p>
+<p align="center">One row in the session <code>...</code> menu for a single delete, plus a bulk management page inside Settings.</p>
 
-**A — the session row's `...` menu** (single delete)
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Winnie-0721/dsh-dialogue-cleanup/main/docs/assets/panel.png" alt="Bulk management panel in Settings: search, filters, per-row status badges and 16 session rows" width="760" />
+</p>
 
-`sidebar.workspaces.session.menu.item` at `order: 500` (after the shipped Archive at 400).
-It opens a themed confirmation in `shell.overlay` that says the action cannot be undone.
+<p align="center">
+  <a href="#quick-start"><strong>Install</strong></a> ·
+  <a href="#ui-at-a-glance">Gallery</a> ·
+  <a href="#how-it-works">How it works</a> ·
+  <a href="docs/RELEASING.md">Releasing</a> ·
+  <a href="https://github.com/Winnie-0721/dsh-dialogue-cleanup/releases/latest">Releases</a>
+</p>
 
-**B — the bulk management panel** (inside Settings)
+## Why it exists
 
-- Entry *and* panel: `settings.section` (`id: dialogue-cleanup`, `order: 25`, after the
-  shipped `account(-10)/general(0)/models(10)/plugins(15)/agent-presets(20)`).
-  One registration is one Settings page; its content renders in the panel's content column.
-- Because of that it needs **no `layout` service** and does not compete for space in
-  `main` or the sidebar — one fewer optional dependency and one fewer degradation branch.
+**One-line positioning: deleting a session should actually delete it.** DeepSeek Harness keeps a session
+in four places at once — the live store, the workspace records, the registry leftovers
+(pin / archive), and the files on disk. Removing one of them leaves a ghost row, a stale
+workspace, or a directory that silently keeps occupying disk. Everything below is that
+positioning made concrete:
 
-Panel capabilities:
+- **One irreversible operation, implemented once.** `deleteSession` lives in the Host
+  (`lib/service.js`) and is reached through two thin adapters — the HTTP contract and the slot UI —
+  so the single-delete path and the bulk path **cannot drift apart**.
+- **A running session is refused, not guessed at.** The Host decides `deletable` and the UI simply
+  does not offer what the Host would reject. The panel never decides by itself whether something is
+  safe to delete.
+- **Archived sessions are still shown by default.** Archiving is *not* deleting: an archived session
+  still occupies disk, so hiding it by default would hide exactly the files you came to clean up.
+  (The official sidebar hides them; here it is a tri-state filter — `hide archived` / `all` /
+  `archived only` — and **archived are shown by default**.)
+- **Subagent rows are labelled.** The official sidebar hides `origin: 'subagent'` rows entirely, so
+  whenever those rows do appear (kind = subagent / all) each one is explicitly badged — a subagent
+  session must never look like an ordinary conversation.
+- **It says what it actually did.** The result line reports ok / failed / degraded / directories
+  removed, and each failure keeps its own reason verbatim. When the live store entry cannot be
+  detached, the plugin reports `detached: false` rather than claiming success.
+- **Errors are semantically truthful.** Unlike the upstream package (which always answered `200`),
+  this one uses real status codes: 400 / 403 / 404 / 405 / 409 / 429 / 500.
 
-| Capability | Notes |
-|---|---|
-| List | `sessionQuery.listSessions()` for the **full logical corpus** (inactive/archived included), merged with `sessionController.list()` for `running`/`blank`/`updatedAt` |
-| Titles | `sessionQuery.readTitleSnapshots(ids)` for the **current page only**, with caching and sharded concurrency (measured ~65 ms per title, see below) |
-| Filters | free text (title/id/project path), project dropdown, state (all/deletable/running), **session-kind tri-state** (main / subagent / all; main only by default, matching the official sidebar), **archive tri-state** (hide archived / all conversations / archived only; **archived are shown by default** — unlike the official sidebar, since archiving is not deleting and archived sessions still occupy disk), sort, paging (max 200 per page) |
-| Bulk delete | tick rows → **one request** `/delete { sessionIds }`; the Host reuses the same `deleteSession` per id |
-| Safety | a running session is never selectable (the Host decides `deletable`; the UI does not guess); "select all" means every deletable row on the page |
-| Feedback | aggregate result (ok/failed/degraded/directories removed) plus each failure reason; the list refreshes afterwards |
-| Cost | the footer shows `tookMs` plus title cache hits/fetches, so a fast response is explainable |
+## UI at a glance
 
-## What it does
+**The confirmation overlay: irreversible, and it says so.** Two closing paths only — an explicit
+Cancel button, or `Esc`. Clicking the scrim deliberately does **not** dismiss it, because a
+mis-click on an irreversible delete should not cost you your chance to confirm:
 
-One irreversible operation, implemented **once** as a Host service
-(`lib/service.js` → `deleteSession`) and reached through two thin adapters
-(the HTTP contract and the slot UI), so the two paths cannot drift:
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Winnie-0721/dsh-dialogue-cleanup/main/docs/assets/confirm.png" alt="Delete confirmation: permanent deletion warning, session id, and Cancel / 永久删除 buttons" width="440" />
+</p>
+
+The overlay is a **native `<dialog>` driven by `showModal()`**, so it enters the browser's *top
+layer* and therefore stacks above the Settings panel it was opened from (a plain positioned element
+could not). That also brings a real focus trap and correct `Esc` semantics for free — and it needs no
+portal outside the component tree.
+
+**The bulk panel (inside Settings)** — search, project / state / session-kind / archive filters,
+sort, paging, and per-row status badges. The badges in the screenshot above come from real render
+output: `空闲` (idle) / `运行中` (running, not selectable) / `子代理` (subagent) / `已归档` (archived).
+
+> The two screenshots are generated from the **actual component tree and the actual CSS** by
+> `scripts/render-shot.mjs` (the same React stand-in the render tests use), rasterised with headless
+> Edge. They are not hand-drawn mockups; they are also not a photograph of a live GUI — see
+> [Honest limitations](#honest-limitations).
+
+## Quick Start
+
+```sh
+dsh plugin --profile web add dsh-dialogue-cleanup
+```
+
+1. **Single delete** — hover a session row in the sidebar, open the `...` menu and pick
+   **Delete session** (registered at `order: 500`, right after the shipped Archive entry at 400).
+   A themed confirmation appears; confirming removes the live entry, the workspace records, the
+   registry leftovers and the on-disk artifacts.
+2. **Bulk delete** — open **Settings → Dialogue Cleanup**. Tick rows (or *Select all deletable*),
+   then delete them in one request.
+3. Host-side changes need a **restart** of the DSH process; client-side changes do not (see the table
+   in [docs/RELEASING.md](docs/RELEASING.md)).
+
+> Compatible with DSH **0.2.0-rc.2**. The npm package and the GitHub Release are published together;
+> versioning rules and the release chain live in [docs/RELEASING.md](docs/RELEASING.md).
+
+## How it works
+
+One npm package carries both halves, installed into the host per the official plugin spec:
+
+- **Host half (repo process)** — `lib/index.js` is a Cordis function plugin exporting only
+  `name` / `inject` / `apply`. It registers a single `ctx.webServer` prefix route and keeps the
+  entire deletion implementation in `lib/service.js`. Filesystem removal and path containment live in
+  `lib/artifacts.js`; the audit trail in `lib/audit.js`.
+- **Client half (browser)** — `client.js`, a single-file bundle registered through
+  `window.__ModuleLoader__.load({ id, factory })`, with **zero dependencies beyond `require("react")`**.
+- **Both entry points are official slots; neither touches the DOM:**
+  - `sidebar.workspaces.session.menu.item` at `order: 500` → the single-delete row.
+  - `settings.section` (`id: dialogue-cleanup`, `order: 25`, after the shipped
+    `account(-10) / general(0) / models(10) / plugins(15) / agent-presets(20)`) → entry **and** panel.
+    One registration is one Settings page, whose content renders in the panel's content column.
+- **Because the panel lives in Settings it needs no `layout` service** and does not compete for space
+  in `main` or the sidebar — one fewer optional dependency and one fewer degradation branch.
+- **The stylesheet travels with the component.** The menu item renders its own `<style>` beside
+  itself (finding H1 of the project's own audit: the row was rendering unstyled because the
+  stylesheet was only injected on the settings path).
+
+### The deletion sequence
 
 1. **Refuse a running session** — 409 `refused`.
-2. **Detach the live store entry** — otherwise the deleted row stays visible as a ghost.
+2. **Detach the live store entry** — otherwise the deleted row survives as a ghost.
 3. **Drop workspace records** — counting only workspaces that actually detached.
-4. **Clear registry leftovers** — pin / archive records via the public idempotent API.
-5. **Remove on-disk artifacts** — `<DSH_HOME>/sessions/<project>/<sessionId>`, plus the
-   derived projection cache.
+4. **Clear registry leftovers** — pin / archive records, via the public idempotent API.
+5. **Remove on-disk artifacts** — `<DSH_HOME>/sessions/<project>/<sessionId>`, plus the derived
+   projection cache.
 6. **Write an audit line** — `<DSH_HOME>/logs/dialogue-cleanup.jsonl`.
 
 ## HTTP contract
 
 | Method | Path | Purpose |
 |---|---|---|
-| `POST` | `/api-ext/dialogue-cleanup/delete` | `{ "sessionId": "..." }` → delete |
+| `POST` | `/api-ext/dialogue-cleanup/delete` | `{ "sessionId": "..." }` → delete one; `{ "sessionIds": [...] }` → delete many (the Host runs the same `deleteSession` per id and returns a per-id result) |
 | `POST`/`GET` | `/api-ext/dialogue-cleanup/list` | session rows with `deletable` / `blockedReason` |
 | `GET` | `/api-ext/dialogue-cleanup/status` | capabilities, config, runtime paths |
 
-Envelope: `{ ok: true, value }` / `{ ok: false, error: { code, message, hint? } }` — with
-**semantically correct HTTP status codes** (400 / 403 / 404 / 405 / 409 / 429 / 500),
-unlike the upstream package, which always answered `200`.
+Envelope: `{ ok: true, value }` / `{ ok: false, error: { code, message, hint? } }`.
 
 ## Configuration
 
-All tunables live in the plugin `Config` (see `lib/config.js`), so a user's patch layer
-survives upgrades. Note that a matching override **replaces the whole `config`** — write
-every field you care about.
+All tunables live in the plugin `Config` (`lib/config.js`), so a user's patch layer survives
+upgrades. A matching override **replaces the whole `config`** — write every field you care about.
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -79,97 +154,91 @@ every field you care about.
 | `clearRegistryRecords` | `true` | unpin / unarchive leftovers |
 | `confirmInUi` | `true` | UI confirmation (the Host does not trust it) |
 | `titleCacheTtlMs` | `300000` | title-fold cache TTL; `0` disables |
-| `titleFetchConcurrency` | `8` | shard concurrency when folding titles (measured ~1.8x from 4 to 8) |
-| `titleLimit` | `100` | max rows per page to fold titles for; `0` skips title reading entirely |
-| `runningProbeTtlMs` | `1000` | how long a running-state snapshot is reused. Turns batch delete from O(N) full-corpus list calls into O(1); `0` re-probes every item (strictest) |
+| `titleFetchConcurrency` | `8` | shard concurrency when folding titles |
+| `titleLimit` | `100` | max rows per page to fold titles for; `0` skips title reading |
+| `runningProbeTtlMs` | `1000` | how long a running-state snapshot is reused. Turns batch delete from O(N) full-corpus list calls into O(1); `0` re-probes every item |
 
 ## Honest limitations
 
-These are **measured** against the live runtime, and differ from what the upstream
-package assumes. They are reported truthfully rather than papered over:
+These are **measured** against the live runtime and differ from what the upstream package assumes.
+They are reported truthfully rather than papered over:
 
 - **No public stop for an idle agent.** The public `Agent` type is
-  `{ readonly id: SessionId }` — no `status`, no `ctx`. Upstream's
-  `agent.status === "running"` and `agent.ctx.fiber._unload()` therefore cannot be
-  relied on (`_unload` is a Cordis *private* method and is deliberately never called).
-  "Is it running?" comes from the public `sessionController.list()` →
-  `SessionSummary.running`. A session that still has an attached agent and cannot be
-  stopped safely is **refused**, and the UI shows why.
+  `{ readonly id: SessionId }` — no `status`, no `ctx`. Upstream's `agent.status === "running"` and
+  `agent.ctx.fiber._unload()` therefore cannot be relied on (`_unload` is a Cordis *private* method
+  and is deliberately never called). "Is it running?" comes from the public
+  `sessionController.list()` → `SessionSummary.running`. A session that still has an attached agent
+  and cannot be stopped safely is **refused**, and the UI shows why.
 - **Detaching the live entry is best-effort.** The public `sessions` service exposes
-  create/prepare/enter/announce/flush/get/list/fork — **no** public `detach`. The plugin
-  tries the public method first, then the internal `store` entry, and reports
-  `detached: false` when neither is available instead of claiming success.
+  create/prepare/enter/announce/flush/get/list/fork — **no** public `detach`. The plugin tries the
+  public method first, then the internal `store` entry, and reports `detached: false` when neither is
+  available instead of claiming success.
 - **Two on-disk id spellings coexist.** Observed in one `<DSH_HOME>`:
-  `...\<uuid>\session.v4.jsonl.zstd` and
-  `...\session-<uuid>\session.v4.jsonl.zstd`. Upstream's exact-id join can never delete
-  the prefixed half. This plugin probes the alternate spelling **only** when it can
-  confirm the candidate is not a different live session; with no such evidence it
-  deletes nothing rather than risk a neighbour.
+  `...\<uuid>\session.v4.jsonl.zstd` and `...\session-<uuid>\session.v4.jsonl.zstd`. An exact-id join
+  can never delete the prefixed half. This plugin probes the alternate spelling **only** when it can
+  confirm the candidate is not a different live session; with no such evidence it deletes nothing
+  rather than risk a neighbour.
+- **The screenshots are real render output, not a live-GUI photograph.** They come from the actual
+  component tree + actual CSS, rasterised headless; the theme tokens are pinned to a light theme and
+  the row data is a demo fixture. What the panel looks like inside a running GUI with the real theme
+  has not been captured here.
 
-## Verification status
+## Development and acceptance
 
-Run `node --test "test/**/*.test.mjs"` — **147/147 passing**, covering path traversal,
-`isInside` boundaries, symlink refusal, the guarded alternate-spelling rule, origin
-framing, body limits and timeouts, status codes, idempotent single-flight, and the
-`refused` path leaving disk untouched.
+```sh
+# Full gate: node --check + migration/contract/render/release regression suites
+node --test "test/**/*.test.mjs"
 
-`node --check` passes on every JavaScript file.
+# Release gate only (no version change, no packing, no publishing)
+pwsh -File scripts/release.ps1 -LocalOnly
 
-**Visual verification was not performed** — this environment provides no browser
-control. Per the official guidance, verification is limited to JavaScript syntax,
-manifest validation, and the live Client slot; what the UI *looks like* is unverified.
-
-See [VERIFICATION.md](VERIFICATION.md) for the full report, including the
-back-filled A–I findings.
-
-## Install
-
-```powershell
-dsh plugin add E:\Code\dsh-plugin-market\dsh-dialogue-cleanup
+# Regenerate the two documentation screenshots from the real component tree
+node scripts/render-shot.mjs
 ```
 
-or via the Plugin Manager (`install_bundle` with this directory as the target).
+The suites are currently **161 tests across 9 files**:
 
-## Layout
+| Suite | Covers |
+|---|---|
+| `contract.test.mjs` | the host ↔ client contract and slot declarations (largest suite) |
+| `service.test.mjs` | `deleteSession` end-to-end behaviour and refusals |
+| `client.test.mjs` | registration surface, ids, no-cross-package requires |
+| `render.test.mjs` | components **actually rendered** through a React stand-in |
+| `artifacts.test.mjs` | path containment, symlink refusal, alternate-spelling guards |
+| `session-id.test.mjs` | id validation (no separators or dots) |
+| `eol.test.mjs` | line endings, and that every tracked file is git-declared `eol=lf` |
+| `release-workflow.test.mjs` | the OIDC publishing structure (**reverse assertion**: `pack-release.yml` must not contain its own publish steps) |
+| `ps-script.test.mjs` | PowerShell 5.1 BOM / encoding pitfalls |
 
-```text
-dsh-dialogue-cleanup/
-├── package.json          dsh.bundle.patch + dsh.client + meta/icon
-├── cordis.patch.yml      inserts the row, inject: [webServer]
-├── icon.svg
-├── locale/{en,zh}.json   display metadata
-├── client.js             slot registrations (menu row + confirm overlay)
-├── lib/
-│   ├── index.js          apply(ctx, config) — assembles and registers routes
-│   ├── config.js         Config schema + defaults
-│   ├── service.js        deleteSession — the single implementation
-│   ├── artifacts.js      disk removal + path containment
-│   ├── http.js           same-origin, body limits, status codes
-│   └── audit.js          JSONL audit trail
-├── scripts/
-│   └── release.ps1       version bump + gate (+ CI pack/release)
-├── .github/workflows/    pack-release.yml + publish-npm.yml
-├── docs/RELEASING.md     versioning rules and the release pipeline
-└── test/                 156 unit/contract/render/release tests
-```
+Two of these exist because the corresponding bug actually shipped and was caught afterwards:
 
-## Releasing
+- **`eol.test.mjs`** — the first release produced *different bytes* from CI (`pnpm pack`) and from
+  local (`npm pack`): `icon.svg` and `LICENSE` were CRLF in CI, because `.gitattributes` declared
+  only `* text=auto` and the GitHub Windows runner defaults to `core.autocrlf=true`. The first
+  version of this test **missed it** (it scanned a hardcoded extension list, so `*.svg` and the
+  extension-less `LICENSE` were invisible); it now sweeps every **git-tracked** file and reads the
+  **effective** attribute via `git check-attr`. Fixing it also caught `.gitignore`.
+- **`release-workflow.test.mjs`** — the OIDC trust is bound to a **workflow filename**, and writing
+  the publish steps a second time is exactly the bug that broke that other repository's releases
+  twice. See [docs/RELEASING.md](docs/RELEASING.md).
 
-Tag-driven, fully automated in GitHub Actions — no local build artifacts, no gh/npm tokens
-spent locally.
+## Repository layout
 
-```powershell
-pwsh -File scripts\release.ps1 -LocalOnly      # gate only (no version change, no publish)
-pwsh -File scripts\release.ps1 -Bump auto      # gate → bump → commit → tag → push
-```
-
-Pushing a `v*` tag triggers **Pack and Release**: gate → `pnpm pack` → GitHub Release
-(with tarball + `version.json` attachments) → npm via OIDC Trusted Publishing.
-
-See [docs/RELEASING.md](docs/RELEASING.md) for the versioning rules, the
-`dsh-plugin-market` → this repo adaptation points, and the two npm pitfalls
-(`npm@latest` + node 22.14, and why the publish step must stay inside
-`publish-npm.yml`).
+| Path | Contents |
+|---|---|
+| `lib/index.js` | `apply(ctx, config)` — assembles and registers the host routes |
+| `lib/service.js` | `deleteSession` — the single deletion implementation |
+| `lib/artifacts.js` | disk removal + path containment |
+| `lib/http.js` | same-origin checks, body limits, status codes |
+| `lib/config.js` | `Config` schema + defaults |
+| `lib/audit.js` | JSONL audit trail |
+| `client.js` | the web client half: slot registrations (menu row + confirm overlay + settings section) |
+| `cordis.patch.yml` | inserts the host half, `inject: [webServer]` |
+| `.github/workflows/` | `pack-release.yml` (tag → gate → pack → GitHub Release) and `publish-npm.yml` (**the only** npm-publish implementation, reused via `workflow_call`) |
+| `docs/RELEASING.md` | version rules and the release chain |
+| `scripts/release.ps1` | version bump + gate (+ CI pack/release) |
+| `scripts/render-shot.mjs` | regenerates the documentation screenshots |
+| `test/` | the 161-test regression suite |
 
 ## License
 

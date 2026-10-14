@@ -20,3 +20,6 @@ dist/
 _*.mjs
 _*.txt
 _push-api.mjs
+
+# 截图脚本的中间产物（PNG 才入库）
+docs/assets/*.html
