@@ -3,21 +3,29 @@
 # 为什么值得一个文件：这一层差异会让「本地绿、CI 红」——
 # 例如 .ps1 若被归一化成 LF 且丢了 BOM，Windows PowerShell 5.1 会按 ANSI 解码中文，
 # 直接把脚本解析坏（那个仓库真的发生过一次，发布因此中断）。
-* text=auto
+#
+# 【全局默认必须带 eol=lf —— 这一条是 v1.0.0 实测换来的】
+# 只写 `* text=auto` 时，行尾由**检出端的 core.autocrlf 决定**：
+#   - 本地已声明 eol=lf 的文件                              -> LF  ✅
+#   - GitHub windows runner（默认 core.autocrlf=true）上
+#     未被显式声明的文件（*.svg、无扩展名的 LICENSE）       -> CRLF ❌
+# 后果：同一个 tag，CI 用 pnpm pack 打的 tarball 里 icon.svg/LICENSE 是 CRLF，
+# 本地 npm pack 的是 LF —— 两个「同一个版本」内容不同（实测差 10 / 21 字节）。
+# 所以默认值必须钉死 eol=lf，让行尾与检出端配置**完全无关**。
+#
+# 注意顺序：gitattributes 是「后匹配者胜」，所以更具体的规则要写在下面。
+* text=auto eol=lf
 
-# 图片按二进制处理，避免行尾/编码转换破坏内容
+# 图片/字体按二进制处理，避免行尾与编码转换破坏内容
 *.png binary
 *.jpg binary
+*.jpeg binary
 *.ico binary
+*.gif binary
+*.woff binary
+*.woff2 binary
 
 # PowerShell 脚本在 Windows 上用 CRLF；其中带中文的 .ps1 依赖 UTF-8 BOM 才能被 PS 5.1
 # 正确解析，该 BOM 属于文件内容，不会被行尾归一化去掉。
+# （写在最后：覆盖上面的全局 eol=lf）
 *.ps1 text eol=crlf
-
-*.js text eol=lf
-*.mjs text eol=lf
-*.cjs text eol=lf
-*.json text eol=lf
-*.yml text eol=lf
-*.yaml text eol=lf
-*.md text eol=lf
