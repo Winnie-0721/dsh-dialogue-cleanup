@@ -2,6 +2,104 @@
 
 ## 未发布
 
+### 界面改版：控件与弹窗全部换成官方形态（R-23 正路）
+
+**动机**：用户要求「调用官方卡片接口和布局，参考另一个插件（插件市场）的操作流程」。
+
+**先说清楚一件事：官方并没有导出 `Card` 这个组件。**
+把 `@deepseek-ai/dsh-client-ui-primitives` 的导出表整表查了一遍（33 个组件），
+其中只有 `HoverCard` / `CodeCard`，而 `CodeCard` **连导出都没有**。
+所以「调用官方卡片接口」实际可行的那一件事，就是**让本插件的控件长得和官方一模一样**。
+
+**R-23 的真实口径（官方 practices.md 原文，逐字）：**
+
+> Do not `require('@deepseek-ai/dsh-client-ui-primitives')` or load any other Harness
+> Client package as a module; `dsh.client.inject` entries only order activation and
+> stay allowed. They change without notice, a plain-JS plugin has no type check, and a
+> throwing component blanks your slot entry (console: `slot entry crashed in '<slot>'`).
+> **Write your own controls and match the host instead: copy markup, CSS, and behavior
+> from the primitive into the plugin** … Rename copied classes under your plugin's
+> prefix, keep only `--dsw-alias-*` token references, and keep the behavior that users
+> rely on, such as Modal focus and Escape handling, `role="switch"` with `aria-checked`,
+> and Tooltip placement. Tokens then remain the only shared styling dependency.
+
+也就是说：**禁止的是 require 官方包；抄它的实现是官方指明的正路。**
+另一个插件（插件市场）走的是 require 官方包那条路，**在规范里明确不可取**——
+纯 JS 没有类型检查，官方一改内部 API，组件抛错会让整条 slot entry 白屏
+（控制台 `slot entry crashed in '<slot>'`）。因此本插件不照它那条路走。
+
+**改了什么**（全部从 asar 内 `dsh-client-ui-primitives/lib/*` 逐条拷贝，类名加 `dscc-` 前缀）：
+
+| 控件 | 官方出处 | 抄过来的内容 |
+|---|---|---|
+| 按钮 | `Button.module.css` | md=36px 高/12px 圆角/`0 14px`/14px 字 22px 行高；sm=28px/8px/`0 10px`/12px 18px |
+| 徽标 | `Tag.module.css` | 999px 圆角、`1px 8px`、11px/17px、字重 500、nowrap；状态 tone 用 `color-mix` 10% 自着色底 + 同色文字（warning 12%） |
+| 卡面 | `Modal.module.css` | `border-l1` + 16px 面板级圆角 + `bg-layer-2` |
+| 弹窗 | `Modal.module.css` + `useModalLayer` | `position:fixed` + `inset:0` + `z-index:1000`，flex 居中，24px 内边距；焦点/Esc 行为整套 |
+
+**令牌换算（为什么不能照抄官方 CSS 原文）**：
+官方那套 `--dsw-radius-*` / `--dsw-alias-interactive-bg-hover` / `--dsw-alias-button-*` /
+`--dsw-alias-bg-mask-1` 名字，**不在**现场 `Theme.listTokens` 的 14 个令牌里（R-24 明令
+只用全表内的令牌）。所以半径与悬停底色一律换算成令牌表达：圆角取官方同族刻度字面值
+（12/8/16px），悬停底色用 `bg-layer-2`，遮罩沿用既有的 `bg-base 45%` 混合。
+几何字面值不是颜色，不受 R-24 约束。
+
+**弹窗为什么从原生 `<dialog>` 改成 `div`**：
+
+旧实现用 `<dialog>` + `showModal()` 进浏览器 top layer 来保证置顶。官方**并没有**这么用。
+改掉的三个理由：
+
+1. 原生 `::backdrop` 会与我们的 `.dscc-scrim` 叠加，不得不把它置透明；
+2. 它在 DOM 里是一个 `<dialog>` 元素，宿主其它样式与查询选择器可能对它产生意料之外的匹配；
+3. 焦点陷阱与 Esc 全交给浏览器，我们无法实现「**busy 时不允许关闭**」——
+   而删除进行中把界面关掉，会让用户以为操作被取消。旧代码只能 `preventDefault` 赌一把。
+
+现在顶层由 `z-index:1000` 负责置顶，键盘与焦点自己实现，于是「busy 时 Esc 不关」
+变成一条确定的分支。**R-22 的边界守住了**：官方用 `createPortal` 到 `document.body`，
+那正是 R-22 禁止的，本插件**不做 portal**，覆盖层仍渲染在 `shell.overlay` 这个
+官方分配的槽位里，靠 z-index 取胜。
+
+**四条既有实测修复全部保留**（换皮不得弄丢，每条都有回归断言 + 变异测试钉住）：
+
+1. 按钮文字 `white-space: nowrap` —— 否则「刷新」被压成「刷/新」两行；
+2. hover 换底只作用于中性按钮 —— 否则实心按钮悬停即「消失」（对比度≈0）；
+3. 主内容列 `min-width: 0` —— 否则标题省略号不生效；
+4. 卡片行内不得 `break-all` —— 否则中文标题逐字符折断。
+
+### 测试口径修正（重要，这是一次收紧而非放宽）
+
+原 R-22 断言是「源码里不得出现 `querySelector`」。而 R-22/R-25 的真实口径是
+**不得读别的插件的 DOM / 样式表 / 组件源码来估位置**：
+
+> Do not read another plugin's DOM, stylesheet, or component source to estimate
+> placement; choose a slot that already allocates space.
+
+在自己的卡片元素上 `querySelector` 找「第一个可聚焦控件」是焦点陷阱的必需步骤
+（官方 `useModalLayer` 也正是这么做的），与「读宿主 DOM 定位」是两件事。
+因此改成**按对象收紧**，并且**同时补上收紧的那一半**：
+
+- 禁止：`document.querySelector`、`querySelector(".some-class")`（按 class 翻别人家节点）、`createPortal`、`documentElement`
+- 放行：在自己的 ref 上按属性/角色查询
+- 正向断言：必须确实存在 `querySelector("[data-modal-autofocus]")`，
+  否则这条测试会被「什么都不查」的空实现骗绿
+
+### 验证
+
+- **测试 179 / 179 通过**（新增 3 条：官方形态几何、官方 Modal 键盘语义、R-22/R-25 收紧）
+- **变异测试 18 / 18 全部击杀**（`test/mutate-official-form.mjs`，需手动运行）：
+  M1 按钮高度、M2 按钮圆角、M3 丢掉 nowrap、M4 徽标圆角、M5 徽标字重、
+  M6 状态徽标退回纯文字色、M7 弹窗丢 z-index、M8 卡片行圆角、M9 丢 min-width:0、
+  M10 Esc 不挡 busy、M11 不处理 Esc、M12 丢焦点陷阱、M13 丢关闭还焦、
+  M14 丢 data-modal-autofocus、M15 按 class 翻宿主 DOM、M16 小按钮刻度、
+  M17 hover 不排除变体、M18 可聚焦集合丢官方口径
+- 变异脚本命名为 `.mjs` 而非 `.test.mjs`：它**改完源码要还原**，
+  被 `test/**/*.test.mjs`  glob 收进去会在套件内部二次运行并把 client.js 留在变异态
+  （这个坑真实踩到过一次，套件因此红了一片）
+
+---
+
+## 未发布（上一轮：侧栏幽灵行）
+
 ### 修复：删掉的会话仍留在官方侧栏「未分组」下（真修法）
 
 **现象**：在面板里删掉会话，删除本身成功（磁盘目录、工作区归属、归档记录全部清干净），

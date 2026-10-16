@@ -409,16 +409,21 @@ test("渲染：确认弹窗在无状态时返回 null，有状态时渲染 dialo
   const dialogTree = app.render(app.React.createElement(entry.component, {}));
   assert.ok(dialogTree !== null, "点击后必须渲染确认框");
 
-  // 【修复后契约】外层是原生 <dialog>（进 top layer，所以能从设置面板之上显示），
-  // 语义挂在它身上；内层卡片不得再声明 role，否则会嵌套 dialog。
-  assert.equal(dialogTree.type, "dialog", "外层必须是原生 <dialog>（top layer 才能置顶）");
+  // 【修复后契约】外层是 div（官方 Modal 同样不是原生 dialog），
+  // 层级由 .dscc-modal 的 position:fixed + z-index:1000 负责，
+  // 语义（role/aria-modal/aria-label）挂在外层；内层卡片不得再声明 role。
+  assert.equal(dialogTree.type, "div", "外层必须是 div（官方 Modal 形态：fixed + z-index）");
+  assert.equal(dialogTree.props.className, "dscc-modal", "外层必须挂 .dscc-modal（z-index:1000 置顶）");
   assert.equal(dialogTree.props.role, "dialog", "外层必须带 role=dialog");
   assert.equal(dialogTree.props["aria-modal"], "true", "必须声明 aria-modal");
-  assert.equal(typeof dialogTree.props.onCancel, "function", "必须处理原生 cancel（Esc）");
+  assert.ok(
+    typeof dialogTree.props["aria-label"] === "string" && dialogTree.props["aria-label"].length > 0,
+    "外层必须带 aria-label（无标题对话框的可访问名）",
+  );
 
-  // 必须真的调用了 showModal()（否则不会进 top layer，「不置顶」的 bug 会复发）
+  // 必须挂 ref：焦点陷阱与 Esc 由 useModalLayer 经这个 ref 拿到卡片元素。
   const ref = dialogTree.props.ref;
-  assert.ok(ref && typeof ref === "object", "必须挂 ref 以便调用 showModal()");
+  assert.ok(ref && typeof ref === "object", "必须挂 ref 以便 useModalLayer 读取卡片元素");
 
   // 确认框必须显示要删的会话标题，用户才能复核
   assert.match(collectText(dialogTree).join(" "), /某个会话/);
@@ -431,7 +436,7 @@ test("渲染：确认弹窗在无状态时返回 null，有状态时渲染 dialo
     if (node.props?.className === "dscc-card" && node.props?.role) innerRoles.push(node.props.role);
     for (const c of node.children ?? []) walk(c);
   })(dialogTree);
-  assert.deepEqual(innerRoles, [], "内层卡片不得再声明 role（原生 dialog 已隐含）");
+  assert.deepEqual(innerRoles, [], "内层卡片不得再声明 role（外层已声明模态语义）");
 });
 
 test("渲染：设置页面板首屏渲染出标题、工具条与加载态（不抛错）", () => {

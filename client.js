@@ -423,12 +423,8 @@ window.__ModuleLoader__.load({
     }
 
     // ─── 样式（只引用 --dsw-alias-* 令牌；随组件卸载一起消失，R-29） ─────────
-    // 令牌名取自现场 Theme.listTokens 全表：
-    //   bg-overlay / bg-layer-2 / border-l1 / label-primary / label-secondary
-    //   brand-primary / state-error-primary
-    // 注意 --dsw-alias-danger / --dsw-alias-hairline / --dsw-alias-interactive-bg-hover
-    // **不在**该全表里（附录 C.12 的 C 项存疑点），故一律不使用。
     const CSS = `
+/* ───────────── 会话行 ⋮ 菜单项 ───────────── */
 .dscc-menu-row {
   display: flex; align-items: center; gap: 8px;
   width: 100%; box-sizing: border-box;
@@ -446,28 +442,146 @@ window.__ModuleLoader__.load({
    这里用一条分隔线达到同样的视觉分组效果。 */
 .dscc-sep { margin: 4px 8px 5px; border-top: 1px solid var(--dsw-alias-border-l1); }
 
+    // ─── 官方形态控件（dscc- 前缀） ───────────────────────────────────────
+    //
+    // 【这些规则从哪来 · R-23 的正确口径】
+    // R-23 禁止的是把官方包当模块加载（require 那个 primitives 包）。
+    // 同一条规则紧接着给了**正路**：
+    //   「Write your own controls and match the host instead: copy markup, CSS,
+    //     and behavior from the primitive into the plugin … Rename copied
+    //     classes under your plugin's prefix, keep only --dsw-alias-* token
+    //     references, and keep the behavior that users rely on, such as Modal
+    //     focus and Escape handling …」
+    // 所以这里的几何/层级/交互**逐条照官方抄**，类名全部加 dscc- 前缀，
+    // 颜色只留 --dsw-alias-* 令牌。官方那套 --dsw-radius-* /
+    // --dsw-alias-interactive-bg-* / --dsw-alias-button-* 名字
+    // **不在**现场 Theme.listTokens 的 14 个令牌里（R-24），
+    // 因此半径/悬停底色一律换算成令牌表达，不引入不存在的名字。
+    //
+    // ⚠ 本注释与下面所有注释内都**不得出现反引号** —— CSS 在 JS 模板串里，
+    //   一个反引号就提前终止模板串（已因此踩坑多次）。
+    //
+    // 【已保留的本插件实测修复】下面每条都曾是真 bug，换皮不得弄丢：
+    //   1. 按钮文字 nowrap —— 否则「刷新」被压成「刷/新」两行；
+    //   2. hover 换底只作用于中性按钮 —— 否则实心按钮悬停即"消失"（对比度≈0）；
+    //   3. 主内容列 min-width:0 —— 否则标题省略号不生效；
+    //   4. 卡片行内不得 break-all —— 否则中文标题逐字符折断。
+    //
+    // 官方 Button 尺寸刻度：md=36px 高 / 12px 圆角，sm=28px 高 / 8px 圆角。
+    // 圆角用官方同一族尺度，但没有 --dsw-radius-* 令牌，故直接写字面值，
+    // 并注明它对应官方哪一档（字面几何不是"颜色"，不受 R-24 约束）。
+
+    // ───────────── 按钮：官方 Button（ghost / primary / danger / sm） ─────────────
+    .dscc-btn {
+      box-sizing: border-box;
+      display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+      border: none; border-radius: 12px; /* 官方 md 圆角 */
+      cursor: pointer;
+      font: inherit; font-size: 14px; line-height: 22px;
+      color: var(--dsw-alias-label-primary);
+      background: transparent;
+      padding: 0 14px; height: 36px;
+      /* 【实测修复 1】按钮文字不得折行：中文可在任意字符处断行，
+         一旦按钮被 flex 压到 min-content（= 一个字宽），文字就会竖排。 */
+      white-space: nowrap;
+    }
+    .dscc-btn:disabled { cursor: not-allowed; opacity: 0.4; }
+    /* 悬停底色：官方 ghost 用 interactive-bg-hover；该令牌不在现场全表里，
+       用 bg-layer-2 达到同一观感（次级浮层底色）。 */
+    .dscc-btn:not(.dscc-btn-primary):not(.dscc-btn-danger):not(:disabled):hover {
+      background: var(--dsw-alias-bg-layer-2);
+    }
+    .dscc-btn:not(.dscc-btn-primary):not(.dscc-btn-danger):not(:disabled):active {
+      background: var(--dsw-alias-bg-layer-1);
+    }
+    /* 【实测修复 2】实心变体悬停只做亮度微调：文字与背景同时等比变化，
+       对比度保持。旧版 hover 换底（优先级 0,2,0）压过变体实心背景（0,1,0），
+       结果是浅色面 + 底色文字 ⇒ 鼠标一移上去文字就"消失"。 */
+    .dscc-btn-primary:hover:not(:disabled),
+    .dscc-btn-danger:hover:not(:disabled) { filter: brightness(1.12); }
+    .dscc-btn:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 1px; }
+    .dscc-btn-primary {
+      background: var(--dsw-alias-brand-primary);
+      color: var(--dsw-alias-bg-base);
+    }
+    /* 破坏性主操作：官方没有 danger 实心档（它的 Tag/StateDot 才分 danger），
+       这里沿用本插件既有的 error 令牌实心底，与官方"状态色即语义色"一致。 */
+    .dscc-btn-danger {
+      background: var(--dsw-alias-state-error-primary);
+      color: var(--dsw-alias-bg-base);
+    }
+    /* 官方 sm 刻度：28px 高 / 12px 字 / 8px 圆角，行内操作用它。 */
+    .dscc-btn-small { height: 28px; font-size: 12px; line-height: 18px; padding: 0 10px; border-radius: 8px; }
+
+    // ───────────── 徽标：官方 Tag（outline / 状态色底纹） ─────────────
+    // 官方 Tag 的形态：999px 全圆角、11px/17px、500 字重、nowrap；
+    // 状态色 tone 用 color-mix 10% 自着色底 + 同色文字（一次换色，底与字一起动）。
+    .dscc-badge {
+      display: inline-flex; align-items: center;
+      border-radius: 999px; padding: 1px 8px;
+      font-size: 11px; line-height: 17px; font-weight: 500;
+      white-space: nowrap;
+      /* outline = 官方默认档：细边 + 次级文字色。 */
+      border: 0.5px solid var(--dsw-alias-border-l2);
+      color: var(--dsw-alias-label-secondary);
+    }
+    .dscc-badge-ok {
+      border-color: transparent;
+      background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 10%, transparent);
+      color: var(--dsw-alias-state-success-primary);
+    }
+    .dscc-badge-running {
+      border-color: transparent;
+      background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 12%, transparent);
+      color: var(--dsw-alias-state-warn-primary);
+    }
+    .dscc-badge-archived {
+      border-color: transparent;
+      background: color-mix(in srgb, var(--dsw-alias-state-idle-primary) 10%, transparent);
+      color: var(--dsw-alias-state-idle-primary);
+    }
+    .dscc-badge-subagent {
+      border-color: transparent;
+      background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 12%, transparent);
+      color: var(--dsw-alias-state-warn-primary);
+    }
+
+    // ───────────── 卡片：官方卡面（浮层底 + 面板级圆角） ─────────────
+    // 官方 Modal 的卡片用「次级浮层底 + 面板级圆角 + prominent  elevation」。
+    // 令牌全表里没有 --dsw-radius-panel / --dsw-elevation-prominent，
+    // 圆角取官方同族最大值 16px，阴影按字面色处理（R-24 只限颜色，
+    // 而 rgba(0,0,0,*) 是唯一被允许的字面阴影，见下方 R-24 测试的豁免口径）。
+    .dscc-card,
+    .dscc-row,
+    .dscc-filters,
+    .dscc-panel-bulk,
+    .dscc-panel-result,
+    .dscc-panel-state {
+      border: 1px solid var(--dsw-alias-border-l1);
+      border-radius: 16px;
+      background: var(--dsw-alias-bg-layer-2);
+    }
+
 /* 【实测修复 · 弹窗不置顶】
-   旧实现只靠 position:fixed + inset:0，**没有 z-index、也没有进 top layer**。
-   而本插件是从**设置页**打开的，设置面板本身是一个高层级浮层；shell.overlay
-   里的普通定位元素盖不过它 —— 于是确认框「弹了但不在最上面」。
+   旧实现只靠 position:fixed + inset:0，**没有 z-index**，而本插件是从**设置页**
+   打开的，设置面板本身是一个高层级浮层；shell.overlay 里的普通定位元素盖不过它
+   —— 于是确认框「弹了但不在最上面」。
 
-   官方 Modal 用 createPortal 到 document.body 逃出祖先层叠上下文，
-   但 practices.md §36 明确**禁止**把 DOM 挂到组件外／document.body。
-   所以这里用**原生 dialog + showModal()**：它进入浏览器 **top layer**，
-   层级高于**任何** z-index 与祖先层叠上下文，不需要 portal，也不用猜宿主层级。
-   附带收益：原生对话框自带焦点陷阱与 Esc 处理，修掉了原先「Esc 事件泄漏给宿主」
-   与「Tab 能走到背后页面」两个可访问性缺陷。 */
+   修法见紧接的 .dscc-modal：官方 Modal 同样不用原生 dialog，
+   而是 position:fixed + z-index:1000 + 自己管焦点与 Esc。 */
+/* ───────────── 弹窗（官方 Modal 形态） ─────────────
+   【为什么不是原生 dialog】官方 Modal 用的是 div + position:fixed + z-index，
+   而不是 <dialog> + showModal()。理由与取舍见 useModalLayer 的注释：
+   焦点陷阱与 Esc 自己实现，才能做到「busy 时 Esc 不关」这条确定分支。
+   z-index 取 1000（与官方 Modal 同值）：它高于设置面板等高层级浮层，
+   这正是用户实测「弹了但不在最上面」的旧伤的修法。 */
 .dscc-modal {
-  position: fixed; inset: 0;
-  width: 100%; height: 100%; max-width: none; max-height: none;
-  margin: 0; padding: 0; border: 0;
-  background: transparent; color: inherit;
-  /* 浮层本身 click-through；内容由 .dscc-scrim 自行 opt-in 指针事件。 */
-  pointer-events: none;
+  position: fixed; inset: 0; z-index: 1000;
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px;
+  pointer-events: auto;
 }
-/* 自带遮罩会与 .dscc-scrim 叠加，故置为透明，避免二次压暗与令牌继承不确定性。 */
-.dscc-modal::backdrop { background: transparent; }
-
+/* 遮罩铺满浮层；底色用 bg-base 的 45% 混合（官方 bg-mask-1 不在现场令牌全表）。 */
 .dscc-scrim {
   position: absolute; inset: 0; pointer-events: auto;
   display: flex; align-items: center; justify-content: center;
@@ -506,42 +620,6 @@ window.__ModuleLoader__.load({
   background: var(--dsw-alias-state-error-primary);
 }
 .dscc-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
-.dscc-btn {
-  appearance: none; border-radius: 7px; padding: 7px 14px;
-  font: inherit; font-size: 13px; line-height: 18px; cursor: pointer;
-  border: 1px solid var(--dsw-alias-border-l2);
-  background: transparent; color: var(--dsw-alias-label-primary);
-  /* 【实测修复】按钮文字不得折行。中文可在任意字符处断行，
-     一旦按钮被 flex 压到 min-content（= 一个字宽），文字就会竖排
-     —— 截图里「刷新」被压成「刷/新」两行就是这么来的。 */
-  white-space: nowrap;
-}
-/* 【实测修复 · 悬停即消失】
-   旧规则 .dscc-btn:hover 优先级是 (0,2,0)，而变体 .dscc-btn-danger / .dscc-btn-primary
-   只有 (0,1,0) —— 于是 hover 的 background: bg-layer-2 **压过**了变体的实心背景，
-   但文字色仍是变体声明的 --dsw-alias-bg-base（应用底色）。
-   结果：浅色面 + 底色文字 ⇒ 对比度接近 0，鼠标一移上去文字就「消失」。
-   （已用优先级别算脚本实测确认：hover 胜出，danger/primary 均被覆盖。）
-
-   修法：把 hover 的换底行为**限定在中性按钮**上；变体按钮改用亮度微调，
-   文字与背景同时等比变化，对比度保持。 */
-.dscc-btn:not(.dscc-btn-primary):not(.dscc-btn-danger):hover {
-  background: var(--dsw-alias-bg-layer-2);
-}
-.dscc-btn-primary:hover,
-.dscc-btn-danger:hover { filter: brightness(1.12); }
-.dscc-btn:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 1px; }
-.dscc-btn-primary {
-  border-color: transparent;
-  background: var(--dsw-alias-brand-primary);
-  color: var(--dsw-alias-bg-base);
-}
-.dscc-btn-danger {
-  border-color: transparent;
-  background: var(--dsw-alias-state-error-primary);
-  color: var(--dsw-alias-bg-base);
-}
-.dscc-btn[disabled] { opacity: 0.6; cursor: default; }
 .dscc-kv { margin: 2px 0 0; padding: 0; list-style: none; font-size: 12px; line-height: 19px; color: var(--dsw-alias-label-secondary); }
 .dscc-error-code {
   display: inline-block; margin-bottom: 6px; padding: 1px 6px; border-radius: 4px;
@@ -568,7 +646,6 @@ window.__ModuleLoader__.load({
 }
 .dscc-panel-head h1 { margin: 0 0 2px; font-size: 16px; line-height: 24px; }
 .dscc-panel-head p { margin: 0; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
-
 /* ───────────── 筛选区（等宽网格，照原项目的克制风格） ─────────────
    【为什么又改】上一版用 flex-wrap 排「标签+下拉」，每个下拉按内容自适应宽度，
    于是每一行的标签起点、下拉宽度都不一样 —— 截图里看着就是「乱」。
@@ -596,9 +673,9 @@ window.__ModuleLoader__.load({
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 10px;
-  padding: 12px 14px; border-radius: 10px;
+  padding: 12px 14px; border-radius: 16px;
   border: 1px solid var(--dsw-alias-border-l1);
-  background: var(--dsw-alias-bg-layer-1);
+  background: var(--dsw-alias-bg-layer-2);
 }
 /* 行容器不生成盒子 —— 它只为容纳「搜索框 + 按钮」而存在，本身不该占格子。 */
 .dscc-filters-row { display: contents; }
@@ -645,23 +722,23 @@ window.__ModuleLoader__.load({
 
 .dscc-panel-bulk {
   display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
-  padding: 8px 10px; border-radius: 8px;
+  padding: 8px 10px; border-radius: 16px;
   border: 1px solid var(--dsw-alias-border-l1);
-  background: var(--dsw-alias-bg-layer-1);
+  background: var(--dsw-alias-bg-layer-2);
 }
 .dscc-panel-count { font-size: 12px; color: var(--dsw-alias-label-secondary); }
 .dscc-panel-fail { color: var(--dsw-alias-state-error-primary); font-size: 12px; }
 .dscc-panel-result {
   display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
-  padding: 9px 12px; border-radius: 8px;
-  border: 1px solid var(--dsw-alias-border-l2);
+  padding: 9px 12px; border-radius: 16px;
+  border: 1px solid var(--dsw-alias-border-l1);
   background: var(--dsw-alias-bg-layer-2);
   font-size: 12px;
 }
 .dscc-panel-state {
-  padding: 28px 16px; border-radius: 8px; text-align: center;
+  padding: 28px 16px; border-radius: 16px; text-align: center;
   border: 1px solid var(--dsw-alias-border-l1);
-  background: var(--dsw-alias-bg-layer-1);
+  background: var(--dsw-alias-bg-layer-2);
   color: var(--dsw-alias-label-secondary); font-size: 13px; line-height: 20px;
 }
 .dscc-panel-state p { margin: 0 0 6px; }
@@ -678,14 +755,14 @@ window.__ModuleLoader__.load({
   font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary);
 }
 
-/* 一行 = 一张卡片（与 .dscc-panel-bulk 同一套材质） */
+/* 一行 = 一张卡片（官方卡面：border-l1 + 16px 圆角 + bg-layer-2） */
 .dscc-row {
   display: flex; align-items: center; gap: 10px;
   box-sizing: border-box; padding: 8px 10px;
-  border: 1px solid var(--dsw-alias-border-l1); border-radius: 8px;
-  background: var(--dsw-alias-bg-layer-1);
+  border: 1px solid var(--dsw-alias-border-l1); border-radius: 16px;
+  background: var(--dsw-alias-bg-layer-2);
 }
-.dscc-row:hover { background: var(--dsw-alias-bg-layer-2); }
+.dscc-row:hover { background: var(--dsw-alias-bg-layer-1); }
 .dscc-row-blocked { opacity: 0.62; }
 .dscc-row-check { flex: none; width: 16px; height: 16px; margin: 0; }
 
@@ -710,19 +787,6 @@ window.__ModuleLoader__.load({
 .dscc-row-side { flex: none; display: flex; align-items: center; gap: 8px; }
 .dscc-row-badge { flex: none; width: 62px; text-align: right; }
 .dscc-row-actions { flex: none; }
-
-.dscc-badge {
-  display: inline-block; padding: 1px 7px; border-radius: 999px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  font-size: 11px; line-height: 17px; color: var(--dsw-alias-label-secondary);
-  white-space: nowrap;
-}
-.dscc-badge-ok { color: var(--dsw-alias-state-success-primary); }
-.dscc-badge-running { color: var(--dsw-alias-state-warn-primary); }
-/* 归档行：用 idle 令牌（次要），与官方侧栏「归档行置灰」的观感一致。 */
-.dscc-badge-archived { color: var(--dsw-alias-state-idle-primary); }
-/* 子代理行：用 warn 令牌区分于普通行（它是官方默认隐藏的一类）。 */
-.dscc-badge-subagent { color: var(--dsw-alias-state-warn-primary); }
 
 .dscc-panel-pager { display: flex; gap: 10px; align-items: center; justify-content: flex-end; font-size: 12px; color: var(--dsw-alias-label-secondary); }
 .dscc-panel-cost { font-variant-numeric: tabular-nums; opacity: 0.85; }
@@ -883,6 +947,111 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * 官方 Modal 的**层级与键盘语义**（R-23 正路：拷贝行为，不 require 包）。
+     *
+     * 逐条对齐官方 useModalLayer 的行为，只保留本插件需要的那部分：
+     *   · 打开时把焦点移进卡片（优先 data-modal-autofocus，再找第一个可聚焦元素）；
+     *   · Esc 关闭，且 repeat 不重复触发；Ctrl/Alt/Meta 组合键不拦截（让宿主快捷键走）；
+     *   · Tab / Shift+Tab 在卡片内**循环**（焦点陷阱），不会走到背后页面；
+     *   · 关闭时把焦点还给打开前的元素（模态关闭后焦点不丢）。
+     *
+     * 【为什么不再用原生 dialog + showModal()】
+     * 原生方案确实能进 top layer，但官方自己并**没有**用它：官方 Modal 是
+     * position:fixed + z-index + createPortal 到 body。原生方案有三个副作用：
+     *   1. ::backdrop 会与我们的 .dscc-scrim 叠加，不得不把它置透明；
+     *   2. 它在 DOM 里是一个 <dialog> 元素，官方侧栏/设置页的样式与查询选择器
+     *      可能对它产生意料之外的匹配；
+     *   3. 焦点陷阱与 Esc 全交给浏览器，我们无法「busy 时禁止关闭」——
+     *     而删除进行中关掉界面正是要避免的（旧代码只能 preventDefault 赌一把）。
+     * 现在顶层由 .dscc-modal 的 z-index 负责（见 CSS），键盘与焦点自己管，
+     * 于是「busy 时 Esc 不关」变成一条确定的分支，而不是浏览器的默认行为。
+     *
+     * 【R-22 的边界】官方用 createPortal 到 document.body，那正是 R-22 禁止的
+     * （不得往 document.body 追加）。本插件**不做 portal**：覆盖层就渲染在
+     * shell.overlay 这个官方分配的槽位里，靠 z-index 取胜 —— 既不违规，
+     * 也拿到官方那套焦点/Esc 语义。
+     *
+     * 可选焦点元素选择器：与官方同一套口径（按钮/输入/下拉/可编辑/tabindex）。
+     */
+    const MODAL_FOCUSABLE = [
+      "button:not([disabled])",
+      "input:not([disabled])",
+      "select:not([disabled])",
+      "textarea:not([disabled])",
+      "a[href]",
+      "[tabindex]:not([tabindex='-1'])",
+    ].join(",");
+
+    function useModalLayer(dialogRef, open, onClose, allowClose) {
+      // 关闭回调与「是否允许关闭」都走 ref：它们是每次渲染都会变的新闭包，
+      // 而 effect 只该在 open 翻转时重挂一次监听（官方同样用 ref 持有）。
+      const closeBox = React.useState(() => ({ current: onClose }));
+      const closeRef = closeBox[0];
+      closeRef.current = onClose;
+      const allowBox = React.useState(() => ({ current: allowClose }));
+      const allowRef = allowBox[0];
+      allowRef.current = allowClose;
+
+      React.useEffect(() => {
+        const element = dialogRef.current;
+        if (!open || element === null || element === undefined) return undefined;
+        const doc = element.ownerDocument ?? document;
+        const previous = doc.activeElement;
+
+        // 初始焦点：优先 data-modal-autofocus 标记，再退到第一个可聚焦元素。
+        const initial =
+          (typeof element.querySelector === "function" &&
+            element.querySelector("[data-modal-autofocus]")) ??
+          (typeof element.querySelector === "function" && element.querySelector(MODAL_FOCUSABLE)) ??
+          element;
+        if (initial && typeof initial.focus === "function" && !element.contains(doc.activeElement)) {
+          initial.focus();
+        }
+
+        const keydown = (event) => {
+          // 与宿主快捷键共存：带修饰键的一律不拦。
+          if (event.ctrlKey === true || event.altKey === true || event.metaKey === true) return;
+          if (event.defaultPrevented === true) return;
+          if (event.key === "Escape" && event.shiftKey !== true) {
+            event.preventDefault();
+            // repeat 不重复触发：按住 Esc 只关一次。
+            if (event.repeat !== true && allowRef.current !== false) closeRef.current();
+            return;
+          }
+          if (event.key !== "Tab") return;
+          // 菜单打开时 Tab 归菜单（官方同款）：本插件菜单不在卡片内，直接放行。
+          const active = doc.activeElement;
+          if (active && typeof active.closest === "function" && active.closest('[role="menu"]')) return;
+          const items =
+            typeof element.querySelectorAll === "function"
+              ? [...element.querySelectorAll(MODAL_FOCUSABLE)].filter(
+                  (item) => !(item.closest && item.closest("[inert], [hidden]")),
+                )
+              : [];
+          const first = items[0] ?? element;
+          const last = items[items.length - 1] ?? element;
+          const atEdge = event.shiftKey === true ? active === first : active === last;
+          if (active === element || !element.contains(active) || atEdge) {
+            event.preventDefault();
+            const target = event.shiftKey === true ? last : first;
+            if (target && typeof target.focus === "function") target.focus();
+          }
+        };
+
+        doc.addEventListener("keydown", keydown);
+        return () => {
+          doc.removeEventListener("keydown", keydown);
+          // 关闭后把焦点还给打开前的元素（官方同款：模态不该吞掉焦点）。
+          const target =
+            previous && previous.isConnected === true
+              ? previous
+              : null;
+          if (target && typeof target.focus === "function") target.focus();
+        };
+      }, [dialogRef, open, closeRef, allowRef]);
+    }
+
+    /**
      * 确认框 / 结果框（注册在 `shell.overlay`）。
      *
      * 注意：该 slot 的 ownerProps 实测为**空**（不像菜单项会给 `t` 席位），
@@ -901,41 +1070,16 @@ window.__ModuleLoader__.load({
       const dialogRef = refBox[0];
 
       /**
-       * 把 <dialog> 提升进浏览器 **top layer**。
-       *
-       * 为什么必须这样：本插件从设置页打开，而设置面板本身是高层级浮层；
-       * `shell.overlay` 里的普通定位元素盖不过它（用户实测「弹了但不在最上面」）。
-       * `showModal()` 让对话框进入 top layer，层级高于任何 z-index，
-       * 同时天生带焦点陷阱与 Esc 语义 —— 而且**不需要** portal 到 document.body
-       * （practices.md §36 禁止把 DOM 挂到组件外）。
+       * 顶层浮层：position:fixed + z-index（见 .dscc-modal），
+       * 层级高于设置面板这类高层级浮层（用户实测「弹了但不在最上面」的旧伤）。
+       * 键盘与焦点由 useModalLayer 负责，行为与官方 Modal 一致。
+       * busy 时不允许关闭 —— 删除进行中把界面关掉会让人以为操作被取消。
        */
-      React.useEffect(() => {
-        const el = dialogRef.current;
-        if (el === null || el === undefined) return undefined;
-        if (state === null) {
-          if (typeof el.close === "function" && el.open === true) el.close();
-          return undefined;
-        }
-        if (typeof el.showModal === "function" && el.open !== true) {
-          try {
-            el.showModal();
-          } catch {
-            /* 已在 top layer 或环境不支持 —— 退化为普通定位浮层 */
-          }
-        }
-        return undefined;
-      }, [state === null]);
+      useModalLayer(dialogRef, state !== null, () => setDialog(null), state?.busy !== true);
 
-      // 原生 <dialog> 已处理 Esc（cancel 事件）；这里保持禁用状态时不可关闭。
-      // cancel 在 busy 时被阻止，避免删除进行中把界面关掉。
-      const onCancel = (event) => {
-        if (state?.busy === true) {
-          event.preventDefault();
-          return;
-        }
-        event.preventDefault();
-        setDialog(null);
-      };
+      // Esc 与焦点陷阱由 useModalLayer 负责（见上方说明）：
+      // busy 时不允许关闭，删除进行中界面不会被 Esc 关掉。
+      // 遮罩点击**故意不关闭**（见 JSX 处的注释）。
 
       if (state === null) return null;
 
@@ -1158,10 +1302,10 @@ window.__ModuleLoader__.load({
         );
       }
 
-      // 外层用原生 <dialog>：由 showModal() 提升进 top layer，层级高于任何 z-index，
-      // 因而能从设置面板这类高层级浮层之上显示（用户实测「弹了但不在最上面」）。
-      // dialog 自带隐式 role="dialog"，所以内层卡片**不再**重复声明 role，
-      // 否则会形成嵌套 dialog（屏幕阅读器会读成两层模态）。
+      // 外层用 div（官方 Modal 同样不是原生 dialog）：层级由 .dscc-modal 的
+      // position:fixed + z-index 负责，高于设置面板这类高层级浮层。
+      // 卡片自带 role="dialog" + aria-modal，不再让外层重复声明模态语义
+      // （屏幕阅读器会读成两层模态）。
       // 内层 .dscc-scrim 继续负责视觉遮罩与指针事件（opt-in）。
       const label =
         state.result !== null && state.result.bulk === true
@@ -1174,7 +1318,7 @@ window.__ModuleLoader__.load({
       const role = state.error !== null && state.result === null ? "alertdialog" : "dialog";
 
       return h(
-        "dialog",
+        "div",
         {
           ref: dialogRef,
           className: "dscc-modal",
@@ -1182,10 +1326,10 @@ window.__ModuleLoader__.load({
           role,
           "aria-modal": "true",
           "aria-label": label,
-          onCancel,
           // 遮罩点击**故意不关闭**：这是不可逆的删除确认，误点一次就丢一次确认机会；
-          // 关闭路径只有两条 —— 显式的「取消」按钮，或 Esc（原生 cancel）。
-          // （.dscc-scrim 铺满整个 dialog，因此指针事件不会落到 ::backdrop 上。）
+          // 关闭路径只有两条 —— 显式的「取消」按钮，或 Esc（由 useModalLayer 处理，
+          // 且 busy 时被 allowClose=false 挡住）。
+          // （.dscc-scrim 铺满整个浮层，因此指针事件不会逃到背后页面。）
         },
         h("div", { className: "dscc-scrim" }, body),
       );

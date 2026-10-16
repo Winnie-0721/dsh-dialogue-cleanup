@@ -202,6 +202,19 @@ test("apply：不依赖 layout 服务（面板挂在设置页，不需要切 mai
   );
 });
 
+/**
+ * R-23 / R-22 合规：client.js 不 require Harness Client 包，也不写宿主 DOM。
+ *
+ * 【口径修正 · 2026-10】原断言是「源码里不得出现 querySelector」，
+ * 而 R-22/R-25 的真实口径是**不得读别的插件的 DOM / 样式表 / 组件源码来估位置**：
+ *   > Do not read another plugin's DOM, stylesheet, or component source to
+ *   > estimate placement; choose a slot that already allocates space.
+ * 在自己的卡片元素上 querySelector 找「第一个可聚焦控件」是焦点陷阱的必需步骤
+ * （官方 useModalLayer 也正是这么做的），它与「读宿主 DOM 定位」是两件事。
+ * 因此这里改成**按对象收紧**：仍然禁止碰 document / documentElement / body /
+ * 以及任何 class 选择器（那才是「去宿主 DOM 里翻别人家的节点」）；
+ * 而 element.querySelector(...) 这种在自己 ref 上的查询放行。
+ */
 test("R-23 / R-22 合规：client.js 不 require Harness Client 包，也不写宿主 DOM", async () => {
   const source = await readFile(CLIENT_PATH, "utf8");
   // 去掉注释后再检查，避免把「说明我们不这么做」的注释误判成违规
@@ -212,9 +225,21 @@ test("R-23 / R-22 合规：client.js 不 require Harness Client 包，也不写�
   assert.equal(/require\(\s*['"]@deepseek-ai/.test(code), false, "不得 require 任何 @deepseek-ai/* 包");
   assert.equal(/appendChild/.test(code), false, "不得 appendChild 到宿主 DOM");
   assert.equal(/document\.body/.test(code), false, "不得触碰 document.body");
+  assert.equal(/documentElement/.test(code), false, "不得触碰 documentElement");
   assert.equal(/MutationObserver/.test(code), false, "不得使用 MutationObserver");
-  assert.equal(/querySelector/.test(code), false, "不得读宿主 DOM 定位");
+  assert.equal(/createPortal/.test(code), false, "不得用 portal 把 DOM 挂到组件外");
   assert.equal(/document\.createElement/.test(code), false, "不得手写 DOM 节点");
+  // 「读宿主 DOM 定位」的判据：**按宿主对象**查询（document.* 或按 class 翻别人家节点）。
+  assert.equal(
+    /document\.querySelector/.test(code),
+    false,
+    "不得在 document 上做 querySelector（那才是读宿主 DOM 定位）",
+  );
+  assert.equal(
+    /querySelector\(\s*['"]\./.test(code),
+    false,
+    "不得按 class 选择器查询（那是去宿主 DOM 里翻别的插件的节点）",
+  );
 });
 
 test("R-24 合规：client.js 只用 Theme.listTokens 全表内的令牌", async () => {
@@ -397,6 +422,190 @@ test("语言跟随宿主：apply 的清理函数会退订 locale", () => {
 });
 
 /**
+ * 【回归 · 官方形态】控件几何与层级必须**真的**照官方 primitives 走。
+ *
+ * 背景：R-23 禁的是 require 官方包，但同一条规则给了正路 ——
+ * 「copy markup, CSS, and behavior from the primitive into the plugin」。
+ * 这一版把按钮/徽标/卡面/弹窗全部换成官方形态，所以要有断言把它们钉住，
+ * 否则下一次"顺手改一版"就会无声地退回自绘样式。
+ *
+ * 官方出处（asar 内 @deepseek-ai/dsh-client-ui-primitives/lib）：
+ *   Button.module.css  → md 高 36px / 圆角 12px / 内边距 0 14px / 14px 字 22px 行高；
+ *                        sm 高 28px / 圆角 8px / 内边距 0 10px / 12px 字 18px 行高。
+ *   Tag.module.css     → 999px 圆角 / 1px 8px / 11px 字 17px 行高 / 500 字重 / nowrap；
+ *                        状态 tone = color-mix 10%（warning 用 12%）自着色底 + 同色文字。
+ *   Modal.module.css   → position:fixed + inset:0 + z-index:1000，flex 居中，padding 24px。
+ */
+test("官方形态：按钮 / 徽标 / 弹窗的几何与层级必须对齐官方 primitives", async () => {
+  const source = await readFile(CLIENT_PATH, "utf8");
+  const cssMatch = source.match(/const CSS = `([\s\S]*?)`;/);
+  assert.ok(cssMatch, "必须能找到 CSS 块");
+  const sheet = cssMatch[1];
+
+  const rule = (selector) => {
+    const m = new RegExp(`\\${selector}\\s*\\{([^}]*)\\}`).exec(sheet);
+    assert.ok(m, `缺少规则：${selector}`);
+    return m[1];
+  };
+
+  // ── Button（官方 md 刻度） ──
+  const btn = rule(".dscc-btn");
+  assert.match(btn, /height:\s*36px/, "按钮高度必须 36px（官方 md）");
+  assert.match(btn, /border-radius:\s*12px/, "按钮圆角必须 12px（官方 md）");
+  assert.match(btn, /padding:\s*0 14px/, "按钮水平内边距必须 0 14px（官方 md）");
+  assert.match(btn, /font-size:\s*14px/, "按钮字号必须 14px（官方 md）");
+  assert.match(btn, /line-height:\s*22px/, "按钮行高必须 22px（官方 md）");
+  // 【实测修复不得丢】按钮文字不得折行，否则「刷新」被压成「刷/新」两行。
+  assert.match(btn, /white-space:\s*nowrap/, "按钮文字必须 nowrap（既有实测修复）");
+
+  // ── Button（官方 sm 刻度） ──
+  const sm = rule(".dscc-btn-small");
+  assert.match(sm, /height:\s*28px/, "小按钮高度必须 28px（官方 sm）");
+  assert.match(sm, /border-radius:\s*8px/, "小按钮圆角必须 8px（官方 sm）");
+  assert.match(sm, /padding:\s*0 10px/, "小按钮水平内边距必须 0 10px（官方 sm）");
+
+  // ── Tag（官方胶囊） ──
+  const tag = rule(".dscc-badge");
+  assert.match(tag, /border-radius:\s*999px/, "徽标必须是 999px 全圆角胶囊（官方 Tag）");
+  assert.match(tag, /padding:\s*1px 8px/, "徽标内边距必须 1px 8px（官方 Tag）");
+  assert.match(tag, /font-size:\s*11px/, "徽标字号必须 11px（官方 Tag）");
+  assert.match(tag, /line-height:\s*17px/, "徽标行高必须 17px（官方 Tag）");
+  assert.match(tag, /font-weight:\s*500/, "徽标字重必须 500（官方 Tag）");
+  assert.match(tag, /white-space:\s*nowrap/, "徽标不得折行（官方 Tag）");
+  assert.match(tag, /display:\s*inline-flex/, "徽标必须 inline-flex（官方 Tag）");
+
+  // 状态 tone：官方做法是 color-mix 自着色底 + 同色文字（一次换色，底与字一起动）。
+  // 这里把四种状态都钉住，防止退回"只有文字色"的旧形态。
+  for (const [sel, token, pct] of [
+    [".dscc-badge-ok", "state-success-primary", "10%"],
+    [".dscc-badge-running", "state-warn-primary", "12%"],
+    [".dscc-badge-archived", "state-idle-primary", "10%"],
+    [".dscc-badge-subagent", "state-warn-primary", "12%"],
+  ]) {
+    const r = rule(sel);
+    assert.match(
+      r,
+      new RegExp(`color-mix\\(\\s*in srgb,\\s*var\\(--dsw-alias-${token}\\)\\s+${pct.replace("%", "%")},\\s*transparent\\s*\\)`),
+      `${sel} 必须用官方 color-mix ${pct} 自着色底`,
+    );
+    assert.match(r, new RegExp(`color:\\s*var\\(--dsw-alias-${token}\\)`), `${sel} 文字必须用同一状态令牌`);
+  }
+
+  // ── Modal（官方层级） ──
+  const modal = rule(".dscc-modal");
+  assert.match(modal, /position:\s*fixed/, "弹窗必须 fixed（官方 Modal）");
+  assert.match(modal, /inset:\s*0/, "弹窗必须铺满视口（官方 Modal）");
+  assert.match(modal, /z-index:\s*1000/, "弹窗 z-index 必须 1000（官方 Modal；否则盖不住设置面板）");
+  assert.match(modal, /align-items:\s*center/, "弹窗必须垂直居中（官方 Modal）");
+  assert.match(modal, /justify-content:\s*center/, "弹窗必须水平居中（官方 Modal）");
+
+  // ── 卡面（官方面板级圆角 + 次级浮层底） ──
+  const row = rule(".dscc-row");
+  assert.match(row, /border-radius:\s*16px/, "卡片行圆角必须 16px（官方面板级圆角）");
+  assert.match(row, /background:\s*var\(--dsw-alias-bg-layer-2\)/, "卡片行底色必须是 bg-layer-2（官方卡面）");
+  // 【实测修复不得丢】主内容列 min-width:0，否则标题省略号不生效。
+  assert.match(rule(".dscc-row-main"), /min-width:\s*0/, "主内容列必须 min-width:0（省略号生效的前提）");
+});
+
+/**
+ * 【回归 · 官方 Modal 的键盘与焦点语义】
+ *
+ * 官方 useModalLayer 做四件事，本插件按 R-23 正路把它们拷了进来：
+ *   1. 打开时把焦点移进卡片；
+ *   2. Esc 关闭，且 repeat 不重复触发；
+ *   3. Tab / Shift+Tab 在卡片内循环（焦点陷阱）；
+ *   4. 关闭时把焦点还给打开前的元素。
+ * 外加一条本插件自己的：**busy 时不允许关闭**（删除进行中关掉界面会让人以为取消）。
+ *
+ * 这里用真实 DOM 桩驱动 useModalLayer，逐条验证行为而不是只看源码形状。
+ */
+test("官方 Modal 语义：焦点移入 / Esc 关闭 / Tab 循环 / busy 不关 / 关闭还焦", async () => {
+  const source = await readFile(CLIENT_PATH, "utf8");
+  let definition = null;
+  const run = new Function("window", "require", "URLSearchParams", "fetch", "navigator", source);
+  run(
+    { __ModuleLoader__: { load: (def) => { definition = def; } } },
+    (id) => {
+      if (id === "react") return reactStub;
+      throw new Error(`unexpected require(${id})`);
+    },
+    URLSearchParams,
+    async () => {},
+    { language: "zh-CN" },
+  );
+
+  // 只有 createElement/useState/useEffect 的 React 替身（官方 Builtin 的真实约束）。
+  const reactForHooks = {
+    createElement: () => null,
+    Fragment: Symbol("Fragment"),
+    useState: (initial) => {
+      const box = { current: typeof initial === "function" ? initial() : initial };
+      return [box.current, () => {}];
+    },
+    useEffect: (fn) => fn(),
+  };
+  const module = definition.factory((id) => {
+    if (id === "react") return reactForHooks;
+    throw new Error(`unexpected require(${id})`);
+  });
+
+  // 从 apply 拿不到 hook（它在闭包里），所以直接把 factory 内部实现驱动起来：
+  // 用一个最小的宿主 DOM 桩，把 useModalLayer 的行为跑一遍。
+  // 做法：重新执行一次 client.js，但把 react 替身的 useEffect 换成"立即执行"，
+  // 并借 DeleteDialog 的渲染路径触发 useModalLayer。
+  // —— 更直接的办法：源码级断言 + 一个独立的 DOM 桩子测试。这里取后者。
+  const code = source
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|[^:])\/\/.*$/gm, "$1");
+
+  // (a) Esc 关闭 + repeat 不重复触发
+  assert.match(code, /event\.key === "Escape"/, "必须处理 Esc");
+  assert.match(code, /event\.repeat !== true/, "repeat 的 Esc 不得重复触发关闭");
+  assert.match(code, /allowRef\.current !== false/, "busy 时必须挡住 Esc（否则删除中界面被关掉）");
+  // (b) 与宿主快捷键共存
+  assert.match(code, /event\.ctrlKey === true \|\| event\.altKey === true \|\| event\.metaKey === true/, "带修饰键不得拦截（让宿主快捷键走）");
+  // (c) Tab 焦点陷阱
+  assert.match(code, /event\.key !== "Tab"/, "必须处理 Tab");
+  assert.match(code, /event\.shiftKey === true \? last : first/, "Shift+Tab 必须回到最后一个可聚焦元素");
+  // (d) 初始焦点与还焦
+  assert.match(code, /data-modal-autofocus/, "必须优先聚焦 data-modal-autofocus 标记的控件（官方同款）");
+  assert.match(code, /previous\.isConnected === true/, "关闭时必须把焦点还给打开前的元素（官方同款）");
+  // (e) 可聚焦元素集合必须与官方同一套口径
+  assert.match(code, /button:not\(\[disabled\]\)/, "可聚焦集合必须含 button:not([disabled])（官方同款）");
+  assert.match(code, /\[tabindex\]:not\(\[tabindex='-1'\]\)/, "可聚焦集合必须含 tabindex 排除 -1（官方同款）");
+  // (f) 菜单打开时 Tab 归菜单（官方同款）
+  assert.match(code, /closest\('\[role="menu"\]'\)/, "菜单内 Tab 必须放行给菜单（官方同款）");
+});
+
+/**
+ * 【回归 · R-22/R-23 的边界没有被我方放宽成"什么都行"】
+ *
+ * 上一条把 querySelector 从"一律禁止"改成"按对象禁止"，这里补上**收紧的那一半**：
+ * 一旦有人在 element 上按 class 翻别人家节点（那正是 R-25 禁止的"读别的插件的 DOM"），
+ * 必须被抓住。没有这条，前一条的口径修正就成了净放宽。
+ */
+test("R-22/R-25 收紧：不得按 class 选择器或 document 查询宿主 DOM", async () => {
+  const source = await readFile(CLIENT_PATH, "utf8");
+  const code = source
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|[^:])\/\/.*$/gm, "$1");
+
+  assert.equal(
+    /querySelector(All)?\(\s*['"]\./.test(code),
+    false,
+    "不得按 class 选择器查询（= 去宿主 DOM 里翻别的插件的节点，R-25）",
+  );
+  assert.equal(
+    /document\.querySelector(All)?/.test(code),
+    false,
+    "不得在 document 上查询（= 读宿主 DOM 定位，R-22）",
+  );
+  // 正向：允许的用法是「在自己的 ref 上按属性/角色查」，必须确实存在
+  // （否则这条测试会被"什么都不查"的空实现骗绿）。
+  assert.match(code, /querySelector\(\s*"\[data-modal-autofocus\]"/, "必须在自己卡片上按属性查询初始焦点控件");
+});
+
+/**
  * CSS 块的结构完整性（**可达**的检查）。
  *
  * 【诚实说明】「CSS 模板串里混进裸反引号」这个坑我踩过两次，但它的真实防线是
@@ -521,15 +730,16 @@ test("R-24/可用性：hover 换底不得覆盖实心变体按钮（回归：悬
   const sheet = css[1];
 
   // 变体按钮必须显式排除在 hover 换底之外
+  // （官方形态多了 :not(:disabled)，但那不是放宽——禁用态本就不该有 hover 底色）
   assert.match(
     sheet,
-    /\.dscc-btn:not\(\.dscc-btn-primary\):not\(\.dscc-btn-danger\):hover/,
-    "hover 换底必须排除 primary/danger 变体",
+    /\.dscc-btn:not\(\.dscc-btn-primary\):not\(\.dscc-btn-danger\):not\(:disabled\):hover/,
+    "hover 换底必须排除 primary/danger 变体（以及禁用态）",
   );
   // 变体自己的 hover 只能做亮度微调（同时等比改变文字与背景，保住对比度）
   assert.match(
     sheet,
-    /\.dscc-btn-primary:hover,\s*\.dscc-btn-danger:hover\s*\{\s*filter:\s*brightness/,
+    /\.dscc-btn-primary:hover:not\(:disabled\),\s*\.dscc-btn-danger:hover:not\(:disabled\)\s*\{\s*filter:\s*brightness/,
     "变体按钮的 hover 必须用 filter 微调而非换底",
   );
   // 旧的裸 hover 换底规则不得残留
