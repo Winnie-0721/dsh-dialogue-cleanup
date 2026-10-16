@@ -776,10 +776,11 @@ window.__ModuleLoader__.load({
   color: var(--dsw-alias-label-tertiary);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-/* 会话 id：官方给「身份串」的做法是一枚 code 底片
+/* 【实测修复 4】这里不得出现 break-all —— 标题是中文时逐字符折断。 */
+/* 无标题行的会话 id：官方给「身份串」的做法是一枚 code 底片
    （font-family-code / 12px-18px / radius-xs / bg-module-platform / label-secondary）。
-   【实测修复 4】这里不得出现 break-all —— 标题是中文时逐字符折断。 */
-.dscc-row-meta code {
+   只在行**没有标题**时才渲染（见 JSX 的注释）——有标题时 id 挪进悬停提示。 */
+.dscc-row-id {
   box-sizing: border-box; display: inline-block;
   max-width: 100%; padding: 1px 6px; border-radius: var(--dsw-radius-xs);
   background: var(--dsw-alias-bg-module-platform);
@@ -2187,10 +2188,16 @@ window.__ModuleLoader__.load({
                   "div",
                   {
                     className: "dscc-row-meta",
+                    // 会话 id 不在行内显示（36 字符的 UUID 读不了也没法用，
+                    // 还把标题挤掉半行），但**保留在悬停提示里**：
+                    // 需要精确核对身份或从日志反查时，鼠标停上去就能看到。
                     title: `${row.sessionId} · ${row.project ?? "—"} · ${formatTime(row.updatedAt ?? row.createdAt)}`,
                   },
-                  h("code", null, row.sessionId),
-                  h("span", { className: "dscc-row-sep" }, "·"),
+                  // 【例外】没有标题的行，id 就是它唯一的身份 —— 这时必须显示，
+                  // 否则同一个项目里几条空标题会话在视觉上完全无法区分
+                  // （而这是一个**不可逆的删除**界面，认错了行代价很大）。
+                  row.title ? null : h("code", { className: "dscc-row-id" }, row.sessionId),
+                  row.title ? null : h("span", { className: "dscc-row-sep" }, "·"),
                   row.project ?? "—",
                   h("span", { className: "dscc-row-sep" }, "·"),
                   formatTime(row.updatedAt ?? row.createdAt),

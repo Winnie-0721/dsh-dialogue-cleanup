@@ -845,6 +845,94 @@ test("渲染：从下拉选一项必须改变请求参数并重发", async () =>
   );
 });
 
+/**
+ * 【会话 id 的显示策略】有标题的行不显示 id，无标题的行必须显示。
+ *
+ * 用户反馈：那串 36 字符的 UUID「在哪都能看到、貌似没有显示的必要」。
+ * 确实——它读不了、没法用，还把标题挤掉半行。所以从常规行里去掉，
+ * 保留在悬停提示（title）里，需要核对身份时鼠标停上去就有。
+ *
+ * 但有一个例外必须守住：**没有标题的会话，id 就是它唯一的身份**。
+ * 本面板是**不可逆的删除**界面，同一个项目里几条空标题会话如果
+ * 视觉上完全一样，用户就没法复核自己勾的是哪一条 —— 认错行代价很大。
+ * 所以无标题行仍显示 id。这条测试同时钉住「去掉」和「例外」两半，
+ * 防止以后有人把条件简化成「一律不显示」。
+ */
+test("渲染：有标题的行不显示会话 id，无标题的行必须显示", async () => {
+  const rowOf = (over) => ({
+    sessionId: "session-5a449d65-f46a-4451-bf6d-e40f4a266ecd",
+    title: "论文",
+    project: "E:\\AI\\DeepSeek Ha",
+    workspaceTitle: "DeepSeek",
+    running: false,
+    blank: false,
+    live: true,
+    persisted: true,
+    archived: false,
+    subagent: false,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-02T00:00:00.000Z",
+    deletable: true,
+    blockedReason: null,
+    ...over,
+  });
+  const listBody = {
+    ok: true,
+    value: {
+      total: 2,
+      page: { page: 1, pageSize: 50, pages: 1 },
+      items: [rowOf({}), rowOf({ sessionId: "session-00000000-1111-2222-3333-444444444444", title: "" })],
+      projects: ["E:\\AI\\DeepSeek Ha"],
+      archived: { filter: "show", total: 0, known: true, subagentTotal: 0 },
+      kind: { filter: "main", subagentTotal: 0, mainTotal: 2 },
+      titles: { requested: 2, cached: 0, fetched: 2, failed: 0, truncated: 0, skipped: false },
+      tookMs: 1,
+    },
+  };
+  const app = boot({ hostActive: "zh", fetchImpl: async () => ({ status: 200, json: async () => listBody }) });
+  const entry = app.byName.get(SECTION_SLOT);
+  const paint = () => {
+    app.beginRender();
+    return app.render(app.React.createElement(entry.component, { close: () => {} }));
+  };
+  paint();
+  app.flushEffects();
+  await new Promise((r) => setTimeout(r, 0));
+  const tree = paint();
+
+  const rows = [];
+  (function walk(node) {
+    if (node === null || node === undefined || typeof node !== "object") return;
+    if (Array.isArray(node)) { node.forEach(walk); return; }
+    const cls = typeof node.props?.className === "string" ? node.props.className.split(/\s+/) : [];
+    if (cls.includes("dscc-row")) rows.push(node);
+    for (const c of node.children ?? []) walk(c);
+  })(tree);
+  assert.equal(rows.length, 2, "必须渲染出两行");
+
+  const texts = rows.map((r) => collectText(r).join(" "));
+  // 有标题的行：正文里不得出现那串 id。
+  assert.ok(!texts[0].includes("5a449d65"), `有标题的行不该显示会话 id，实际：${texts[0]}`);
+  assert.match(texts[0], /论文/, "有标题的行必须显示标题");
+  // 无标题的行：必须显示 id（否则与同项目其它空标题行无法区分）。
+  assert.ok(texts[1].includes("00000000"), `无标题的行必须显示会话 id，实际：${texts[1]}`);
+  assert.match(texts[1], /无标题/, "无标题的行要有占位标题文案");
+
+  // 但 id 并没有丢：两行的悬停提示里都还在。
+  const metas = rows.map((r) => {
+    let meta = null;
+    (function walk(node) {
+      if (node === null || node === undefined || typeof node !== "object") return;
+      if (Array.isArray(node)) { node.forEach(walk); return; }
+      const cls = typeof node.props?.className === "string" ? node.props.className.split(/\s+/) : [];
+      if (cls.includes("dscc-row-meta")) meta = node;
+      for (const c of node.children ?? []) walk(c);
+    })(r);
+    return meta;
+  });
+  assert.match(String(metas[0].props.title), /5a449d65/, "有标题的行必须能在悬停提示里看到 id");
+});
+
 /** 上面用到 await0 只是为了保持同步；这里做 CSS 层的断言（读源码文本）。 */
 test("布局 CSS：筛选网格标签列与控件列都定宽，行内容可省略", async () => {
   const { readFile } = await import("node:fs/promises");
