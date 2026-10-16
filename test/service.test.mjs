@@ -10,6 +10,7 @@ import {
   judgeRunning,
   getService,
   createService,
+  announceSessionRemoved,
 } from "../lib/service.js";
 import { resolveConfig } from "../lib/config.js";
 
@@ -495,4 +496,112 @@ test("detachLiveStore：遍历候选 store 承载位置，且只认 Map 语义",
   const bare = new Map([["s1", {}]]);
   assert.equal(detachLiveStore({ store: bare }, "s1"), "detached");
   assert.equal(bare.has("s1"), false, "裸 entry 也必须真的从 store 里删掉");
+});
+
+/**
+ * 【回归 · 2026-10-16 · 「删了却还在未分组里」的真修法】
+ *
+ * 前两次诊断都错了：
+ *   1. 先后怀疑过「事务顺序」（1.0.2 改了顺序+条件，问题依旧）；
+ *   2. 再怀疑过客户端 `projectList()` 从 `subagentCatalog` 注入（实测证伪 ——
+ *      整个 projcache 目录搜 `subagentCatalog` 键 0 处命中，投影文件实际结构是
+ *      `{version, record:{identity, rows}}`）。
+ *
+ * 最终用全盘扫描定论：三个幽灵 id 在 `~/.dsh` 里只出现在审计日志与记忆索引，
+ * **sessions 目录 / projcache / storages 全部零命中** —— 持久化数据已 100% 清干净，
+ * 缺的只是让客户端重新拉一次列表。
+ *
+ * 官方入口是已声明的 Remote Event `api-session/removed`（`mode: 'emit'`）：
+ * Host 侧 `ctx.emit` 自动中继到客户端，客户端 `handleSessionRemoved` 收到后
+ * `recordMutation({kind:"remove"})` —— 只有这一支才真正把行从侧栏抹掉。
+ */
+test("announceSessionRemoved：emit 已声明的 Remote Event api-session/removed", async () => {
+  const emitted = [];
+  const ctx = { emit: (name, payload) => emitted.push([name, payload]) };
+  const out = await announceSessionRemoved(ctx, "s1", { debug() {} });
+  assert.equal(out.announced, true, "emit 成功应如实上报");
+  assert.deepEqual(emitted, [["api-session/removed", "s1"]], "事件名与载荷必须与官方声明一致");
+});
+
+test("announceSessionRemoved：拿不到 ctx / 没有 emit 时如实报 false，不抛错", async () => {
+  assert.deepEqual(await announceSessionRemoved(undefined, "s1"), { announced: false, reason: "no-emit" });
+  assert.deepEqual(await announceSessionRemoved(null, "s1"), { announced: false, reason: "no-emit" });
+  assert.deepEqual(await announceSessionRemoved({}, "s1"), { announced: false, reason: "no-emit" });
+});
+
+/**
+ * 【关键安全属性】通知失败**绝不能**让一个已经成功的删除变成失败。
+ * `ctx.emit` 在没有该事件声明的运行时（或旧版本）可能抛错。
+ */
+test("announceSessionRemoved：emit 抛错时降级为 announced:false，不把异常抛给删除事务", async () => {
+  const ctx = { emit: () => { throw new Error("event not declared"); } };
+  const out = await announceSessionRemoved(ctx, "s1", { debug() {} });
+  assert.equal(out.announced, false);
+  assert.equal(out.reason, "emit-threw");
+});
+
+/** 删除成功后必须真的发出通知（这是用户能看到「侧栏立刻少一行」的原因）。 */
+test("删除成功后必须 emit api-session/removed（否则侧栏留着旧行）", async () => {
+  const { __resetInFlight } = await import("../lib/service.js");
+  __resetInFlight();
+
+  const sessionId = "session-announce";
+  const emitted = [];
+  const services = {
+    sessionController: { list: async () => ({ items: [] }) },
+    agents: { get: () => undefined },
+    sessions: { list: () => [], store: new Map() },
+    workspaceRegistry: {
+      list: () => [{ sessionIds: [sessionId], detachSession: async () => {} }],
+      unpinSession: async () => {},
+      unarchiveSession: async () => {},
+    },
+  };
+  const ctx = {
+    logger: { warn() {}, debug() {} },
+    get: (k) => services[k],
+    emit: (name, payload) => emitted.push([name, payload]),
+  };
+  const audit = { record: async () => ({ ok: true, path: null }), enabled: false, path: null };
+  const service = createService(
+    ctx,
+    resolveConfig({ audit: false, matchAlternateIdSpelling: false, removeProjectionCache: false }),
+    audit,
+  );
+
+  const result = await service.deleteSession(sessionId, { kind: "test" });
+  assert.equal(result.ok, true);
+  assert.equal(result.value.announced, true, "删除成功后必须发出通知");
+  assert.equal(result.value.announceReason, "emitted");
+  assert.deepEqual(emitted, [["api-session/removed", sessionId]]);
+});
+
+/** `announceRemoval: false` 时不得发通知，且如实标出原因（便于排障）。 */
+test("announceRemoval:false 时不发通知，且如实标 reason=disabled", async () => {
+  const { __resetInFlight } = await import("../lib/service.js");
+  __resetInFlight();
+
+  const emitted = [];
+  const services = {
+    sessionController: { list: async () => ({ items: [] }) },
+    agents: { get: () => undefined },
+    sessions: { list: () => [], store: new Map() },
+  };
+  const ctx = {
+    logger: { warn() {}, debug() {} },
+    get: (k) => services[k],
+    emit: (name, payload) => emitted.push([name, payload]),
+  };
+  const audit = { record: async () => ({ ok: true, path: null }), enabled: false, path: null };
+  const service = createService(
+    ctx,
+    resolveConfig({ audit: false, matchAlternateIdSpelling: false, removeProjectionCache: false, announceRemoval: false }),
+    audit,
+  );
+
+  const result = await service.deleteSession("s-off", { kind: "test" });
+  assert.equal(result.ok, true);
+  assert.equal(result.value.announced, false);
+  assert.equal(result.value.announceReason, "disabled");
+  assert.equal(emitted.length, 0, "关掉后一次都不许发");
 });

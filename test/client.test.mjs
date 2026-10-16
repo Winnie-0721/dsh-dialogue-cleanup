@@ -690,3 +690,37 @@ test("删除结果：内存条目三态分支不得退化为两态（2026-10 回
     "detached 分支必须保留（三态齐备）",
   );
 });
+
+/**
+ * 【回归 · 2026-10-16 · 「删了却还在未分组里」的真修法】
+ *
+ * Host 删除成功后必须 emit 已声明的 Remote Event `api-session/removed`，
+ * 客户端据此把该行从侧栏列表里抹掉。前端要把这个状态显示出来：
+ *   - announced === true  → 「已通知侧边栏移除该会话」
+ *   - announced === false → 如实说明「未能通知，可能要刷新页面」
+ *
+ * 少了这条分支，用户删完之后得不到任何关于侧栏的反馈，
+ * 于是反复来问「怎么还在」。
+ */
+test("删除结果：必须显示「是否已通知侧边栏」（2026-10-16 回归）", async () => {
+  const source = await readFile(CLIENT_PATH, "utf8");
+
+  // ① 渲染处必须读 v.announced 三态（true / false / 缺省不显示）。
+  assert.match(source, /v\.announced === true/, "必须处理「已通知」这一态");
+  assert.match(source, /v\.announced === false/, "必须处理「未能通知」这一态");
+  assert.ok(source.includes('t("done.announced")'), "已通知分支必须引用对应文案");
+  assert.ok(source.includes('t("done.announceOff")'), "未通知分支必须引用对应文案");
+
+  // ② 两种语言都要有新键 —— 少一种会静默退化成内置表。
+  assert.ok(/"done\.announced": "已通知侧边栏移除该会话/.test(source), "中文 locale 必须有 done.announced");
+  assert.ok(/"done\.announced": "The sidebar was told to drop this session/.test(source), "英文 locale 必须有 done.announced");
+  assert.ok(/"done\.announceOff": "未能通知侧边栏/.test(source), "中文 locale 必须有 done.announceOff");
+  assert.ok(/"done\.announceOff": "Could not notify the sidebar/.test(source), "英文 locale 必须有 done.announceOff");
+
+  // ③ Host 侧必须真的 emit 这个事件名（client.test.mjs 只读 client.js，
+  //     所以这条断言放在 service 的测试里；这里只确认前端引用了同一个字段名）。
+  assert.ok(
+    /announced:\s*announced\.announced/.test(await readFile(new URL("../lib/service.js", import.meta.url), "utf8")),
+    "Host 返回值必须带 announced 字段（前端依赖它）",
+  );
+});

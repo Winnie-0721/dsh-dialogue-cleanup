@@ -2,6 +2,68 @@
 
 ## 未发布
 
+### 修复：删掉的会话仍留在官方侧栏「未分组」下（真修法）
+
+**现象**：在面板里删掉会话，删除本身成功（磁盘目录、工作区归属、归档记录全部清干净），
+但官方侧栏仍把那几行列在「未分组」下面。
+
+**前两次诊断都是错的，在此如实记录**：
+
+1. ❌「删除事务顺序问题」（先摘归属、后删工件）→ 1.0.2 改了顺序并加了条件，
+   **问题依旧**。
+2. ❌「客户端 `projectList()` 从父会话 `subagentCatalog` 注入子会话 id」
+   → **被自己的实测证伪**：整个 `session_projcache` 目录搜 `subagentCatalog` 键
+   **0 处命中**，投影文件的实际结构是 `{version, record:{identity, rows}}`。
+
+**最终用全盘扫描定论**：对那三个会话 id 递归搜索整个 `~/.dsh`，它们只出现在
+审计日志与记忆索引里 —— **sessions 目录、projcache、storages 全部零命中**。
+即：**持久化数据已经 100% 清除干净，缺的只是让客户端重新拉一次列表。**
+
+官方侧栏的列表来自客户端 `ApiSessionList.refreshList()`
+（`dsh-api-session-controller/lib/client.js`）：
+`const result = await this.remote.session.list({});`
+这次拉取发生在删除**之前**；删除后没有任何东西触发重新拉取，旧 id 就一直留在
+`listSnapshot` 里，被 `groupByWorkspace` 归进 `stray` → 渲染成「未分组」。
+
+**修法**：删除成功后 emit 官方**已声明的 Remote Event** `api-session/removed`。
+
+```js
+// dsh-api-remotes/lib/types/remote-events.js
+{ event: 'api-session/removed', mode: 'emit' }
+// dsh-api-session-controller/lib/typert.host.js
+"'api-session/removed'(sessionId: SessionId): void"
+```
+
+`mode: 'emit'` 表示 Host 侧 `ctx.emit` 会**自动中继到所有客户端**；官方自己正是这么用：
+
+```js
+// dsh-api-session-controller/lib/index.js
+ctx.on("session/disposed", (session) => { ctx.emit("api-session/removed", session.id); });
+```
+
+客户端 `handleSessionRemoved` 收到后：
+
+```js
+const durableSubagent = this.subagentAddress(id) !== void 0 || …origin === "subagent";
+this.recordMutation(durableSubagent ? {kind:"status",…} : {kind:"remove", sessionId});
+```
+
+**只有 `kind:"remove"` 才会真正把 id 从侧栏列表抹掉**（`kind:"status"` 只改状态、不抹行）。
+
+**新增配置** `announceRemoval`（默认 `true`）：关掉后回到「不通知、靠用户自己刷新」的旧行为。
+
+**安全属性**：通知失败**绝不能**让一个已成功的删除变成失败。`ctx.emit` 在没有该事件
+声明的运行时可能抛错，因此整段包在 try/catch 里，失败只记日志并在返回值里标
+`announced:false`，界面据此如实提示「可能要刷新页面」。
+
+### 验证
+
+- 全量测试 **176/176 通过**（新增 6 条回归，锁住事件名、载荷、降级路径、配置开关）。
+- 变异测试 **8/8 命中**，包括：不 emit、emit 错事件名、emit 抛错外泄、谎报
+  `announced:true`、删除后不调用、默认关掉通知、前端不显示、前端键名打错。
+
+## 1.0.2
+
 ### 修复：删除结果把「本就不在内存里」误报成「摘除失败」
 
 **现象**：删掉一个已关闭的旧会话后，结果弹窗每次都显示

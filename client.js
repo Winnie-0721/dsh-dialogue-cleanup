@@ -78,7 +78,15 @@ window.__ModuleLoader__.load({
         "done.auditOff": "审计：未开启",
         "done.auditFailed": "审计写入失败：{error}",
         "done.partial": "注意：没有摘除内存条目，也没有找到磁盘工件 —— 这个 id 可能本来就不存在。",
-        "done.reloadHint": "侧边栏会话行会在宿主刷新列表后消失；若仍显示，刷新页面即可。",
+        "done.reloadHint": "侧边栏会话行会在宿主刷新列表后消失；若仍显示，刷新页面即可。（删除成功后已主动通知侧边栏，正常情况下它会自己消失。）",
+        // 已成功通知官方侧栏移除该行（Host emit 了已声明的 Remote Event
+        // api-session/removed，客户端据此把 id 从列表里抹掉）——
+        // 这才是「删了却还在未分组里」的真修法：持久化数据早就清干净了，
+        // 之前缺的只是让客户端重新拉一次列表。
+        "done.announced": "已通知侧边栏移除该会话",
+        // 通知没发成功（配置关掉 / 运行时没有该事件声明）：删除本身已成功，
+        // 但侧栏要等它自己刷新才会消失，所以如实提示，不假装已经同步。
+        "done.announceOff": "未能通知侧边栏（删除已成功）：侧边栏可能要刷新页面后才消失。",
         "done.close": "关闭",
         "panel.title": "对话清理",
         "panel.subtitle": "批量筛选并删除会话；删除不可恢复。",
@@ -181,7 +189,16 @@ window.__ModuleLoader__.load({
         "done.auditOff": "Audit: disabled",
         "done.auditFailed": "Audit write failed: {error}",
         "done.partial": "Note: nothing was detached and no on-disk artifact was found — this id may not have existed.",
-        "done.reloadHint": "The sidebar row disappears once the host refreshes its list; reload the page if it lingers.",
+        "done.reloadHint": "The sidebar row disappears once the host refreshes its list; reload the page if it lingers. (A successful delete already notifies the sidebar, so it normally drops on its own.)",
+        // The Host emitted the declared Remote Event `api-session/removed`, so the
+        // sidebar drops the row itself. This is the real fix for "deleted but still
+        // shows under Ungrouped": the on-disk data was already gone — the only
+        // missing piece was telling the client to re-pull its list.
+        "done.announced": "The sidebar was told to drop this session",
+        // Notification did not go out (disabled in config, or the runtime has no such
+        // event declaration). The delete itself succeeded; the sidebar may keep the
+        // stale row until it refreshes on its own. Say so instead of faking sync.
+        "done.announceOff": "Could not notify the sidebar (delete succeeded): the row may linger until you reload the page.",
         "done.close": "Close",
         "panel.title": "Dialogue Cleanup",
         "panel.subtitle": "Filter and delete sessions in bulk. Deletion cannot be undone.",
@@ -1015,6 +1032,19 @@ window.__ModuleLoader__.load({
         // 归属被**故意保留**时说明原因：这不是失败，而是为了不让该行变成「未分组」孤儿。
         if (v.keptWorkspaceMembership === true) {
           rows.push(h("li", { key: "keptGroup" }, t("done.keptGroup")));
+        }
+        // 是否已通知官方侧栏移除该行。
+        //
+        // 【2026-10-16 · 「删了却还在未分组里」的真修法】
+        // Host 删除成功后 emit 已声明的 Remote Event `api-session/removed`，
+        // 客户端 `handleSessionRemoved` 据此 `recordMutation({kind:"remove"})`，
+        // 侧栏于是真的少一行。实测证实之前缺的就是这一步：持久化数据早已清干净
+        // （全盘扫描 sessions / projcache / storages 对该 id 全部零命中）。
+        // 通知没发成功时如实说明，不假装已同步。
+        if (v.announced === true) {
+          rows.push(h("li", { key: "announced" }, t("done.announced")));
+        } else if (v.announced === false) {
+          rows.push(h("li", { key: "announceOff" }, t("done.announceOff")));
         }
         rows.push(h("li", { key: "ws" }, t("done.workspaces", { count: v.workspaces ?? 0 })));
         rows.push(h("li", { key: "files" }, t("done.files", { count: v.files ?? 0 })));
