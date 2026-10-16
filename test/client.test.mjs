@@ -638,3 +638,55 @@ test("面板删除：内联 doDelete 死代码必须已删除（H2 回归）", a
     "面板级结果条不得复活（恒为 null 的假 UI）",
   );
 });
+
+/**
+ * 【回归 · 2026-10】删除结果必须按**三态**渲染，不能退化成两态。
+ *
+ * Host 的 `detachLiveStore` 现在返回 detached / absent / failed 三态：
+ *   - detached：确实摘掉了；
+ *   - absent  ：本来就不在内存里 —— **正常收尾**；
+ *   - failed  ：试了没摘掉 —— 真的降级。
+ *
+ * 旧前端只有 `v.detached === true ? … : …` 两态，会把 absent 显示成
+ * 「内存条目未摘除（降级：只删了磁盘）」。真实宿主里删一个已关闭的会话
+ * 绝大多数落在 absent，于是用户每次删旧会话都看到一句吓人的降级提示，
+ * 反而盖住真正该关注的情况。
+ *
+ * 这条测试按本文件既有风格做源码级断言（client.test.mjs 全部是源码级断言，
+ * 没有 React 渲染环境），锁住三态分支与它对应的 locale 键都存在。
+ */
+test("删除结果：内存条目三态分支不得退化为两态（2026-10 回归）", async () => {
+  const source = await readFile(CLIENT_PATH, "utf8");
+
+  // ① 渲染处必须有 absent 这一分支。
+  assert.match(
+    source,
+    /v\.detach === "absent"/,
+    "结果渲染必须区分 absent（正常收尾）与 failed（真降级）",
+  );
+  assert.ok(
+    source.includes('t("done.detachedAbsent")'),
+    "absent 分支必须引用 done.detachedAbsent 文案",
+  );
+
+  // ② 两种语言的 locale 表都必须有新键 —— 少一种就会静默退化成内置表，
+  //    表现为中文用户看到英文（或反之）。
+  assert.ok(
+    /"done\.detachedAbsent": "内存中已无此会话/.test(source),
+    "中文 locale 必须有 done.detachedAbsent",
+  );
+  assert.ok(
+    /"done\.detachedAbsent": "No live entry to detach/.test(source),
+    "英文 locale 必须有 done.detachedAbsent",
+  );
+
+  // ③ failed 分支的文案必须仍然存在（不得被 absent 替换掉）。
+  assert.ok(
+    source.includes('t("done.detachedNo")'),
+    "failed 分支的 done.detachedNo 必须保留",
+  );
+  assert.ok(
+    source.includes('v.detached === true'),
+    "detached 分支必须保留（三态齐备）",
+  );
+});

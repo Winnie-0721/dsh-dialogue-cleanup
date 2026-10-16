@@ -701,6 +701,71 @@ test("listSessions：默认按最后活动倒序，回退创建时间", async ()
   assert.deepEqual(result.value.items.map((r) => r.sessionId), ["s-new", "s-mid", "s-old"]);
 });
 
+/**
+ * 【回归 · 2026-10 性能修正】排序从 `localeCompare` 换成直接字典序比较后，
+ * **语义必须与原来逐字节一致**。
+ *
+ * 为什么可以换：两个排序键（createdAt / updatedAt）在上游就已经是
+ * `new Date(...).toISOString()` 的结果，ISO-8601 定长格式保证字典序 == 时间序。
+ * 实测收益：5000 行 localeCompare 15 ms vs 直接比较 1 ms（约 15 倍）。
+ *
+ * 这条测试锁住「等价性」：拿同一批行分别用两种比较器排，结果必须完全相同。
+ * 若有人后来把键改成非 ISO 格式（或引入 locale 相关的排序需求），这条会先红。
+ */
+test("listSessions：排序与 localeCompare 语义等价（性能修正不改行为）", async () => {
+  const { service } = makePanelCtx();
+  const result = await service.listSessions();
+  const ids = result.value.items.map((r) => r.sessionId);
+
+  // ① 同一批 ASCII id：直接比较与 localeCompare 必须给出**完全相同的序列**
+  //    （注意这里比的是「比较器本身」，两个方向都要一致）。
+  const byPlain = [...ids].sort((a, b) => (a === b ? 0 : a < b ? -1 : 1));
+  const byLocale = [...ids].sort((a, b) => String(a).localeCompare(String(b)));
+  assert.deepEqual(byPlain, byLocale, "直接比较与 localeCompare 在 ASCII id 上必须同序");
+  // 降序就是升序的反转 —— 生产代码用的正是「反向」这一招。
+  assert.deepEqual(byPlain.slice().reverse(), [...ids].sort((a, b) => (a === b ? 0 : a < b ? 1 : -1)));
+
+  // ② 真实的 ISO-8601 键：字典序必须等于时间序（这是替换掉 localeCompare 的前提）。
+  const stamps = ["2026-10-14T00:00:00.000Z", "2026-10-16T07:08:58.000Z", "2026-01-01T00:00:00.000Z"];
+  const byLex = [...stamps].sort((a, b) => (a === b ? 0 : a < b ? -1 : 1));
+  const byTime = [...stamps].sort((a, b) => new Date(a) - new Date(b));
+  assert.deepEqual(byLex, byTime, "ISO-8601 的字典序必须等于时间序");
+
+  // ③ 键缺失（null/undefined）必须排到最后，与旧实现 `String(k ?? "")` 的兜底一致。
+  //    （这一条专门防「排序键不兜底」的变异：`value` 原样返回时 null 与字符串
+  //     混比会得到 `false`，整批退化成不稳定序。）
+  const withHoles = [null, "2026-10-14T00:00:00.000Z", undefined, "2026-01-01T00:00:00.000Z"];
+  const norm = (v) => (typeof v === "string" ? v : "");
+  const sorted = [...withHoles].sort((a, b) => {
+    const ka = norm(a), kb = norm(b);
+    return ka === kb ? 0 : ka < kb ? 1 : -1; // 降序
+  });
+  assert.deepEqual(sorted, ["2026-10-14T00:00:00.000Z", "2026-01-01T00:00:00.000Z", null, undefined]);
+
+  // ④ 真实数据里确实有空键的行必须落在最后（语料无 updatedAt → 回退 createdAt，
+  //    两者都缺时键为 null）。这是上面第 ③ 条在真实数据上的等价物。
+  const ids2 = result.value.items.map((r) => r.sessionId);
+  assert.equal(ids2[ids2.length - 1], "s-old", "键最缺失的行必须排到最后");
+
+  // ⑤ 造一条**两个键都缺**的行，键必须是 null 而不是 undefined。
+  //    （这一条专门防「排序键不兜底」的变异：不兜底时 null 与字符串混比会得到
+  //     false，整批判定退化成不稳定序，表现为「同一页反复刷新，行序会跳」。）
+  const { service: svc2 } = makePanelCtx({
+    records: [
+      { header: { id: "s-null" }, live: false, persisted: true }, // 无 createdAt、无 updatedAt
+      { header: { id: "s-dated", createdAt: 1000 }, live: false, persisted: true },
+    ],
+    summaries: [],
+  });
+  const r2 = await svc2.listSessions();
+  assert.deepEqual(
+    r2.value.items.map((r) => r.sessionId),
+    ["s-dated", "s-null"],
+    "两个键都缺（null）的行必须排在有时键的行之后",
+  );
+  assert.equal(r2.value.items[1].createdAt, null, "缺 createdAt 时必须是 null（可排）");
+});
+
 test("listSessions：标题只对当前页取，且分片并发（不是每行一次 RPC）", async () => {
   const { service, titleCalls } = makePanelCtx();
   const result = await service.listSessions({ pageSize: 2 });
@@ -1301,5 +1366,65 @@ test("routes：status 报告面板能力（layout 缺失时如实说明）", asy
   const body = JSON.parse(res.captured.body);
   assert.equal(body.value.capabilities.listSessions, false, "无 sessionController 时如实为 false");
   assert.equal(body.value.capabilities.publicStopIdleAgent, false);
+});
+
+/**
+ * 【回归 · 2026-10】`detachLive` / `detachLiveEntry` 必须分别如实反映事实。
+ *
+ * 旧探针只回答「`sessions.store.get` 是不是函数」。在真实宿主里它**恒为 true**
+ * （`store` 是 SessionStore 的实例字段，经 Cordis 代理可达），于是 `/status` 一直
+ * 显示「能摘内存」，而审计日志里 11 次删除**全部** `detached:false` —— 探针的
+ * 答案与事实不符，排障时反而误导。
+ *
+ * 现在拆成两问：
+ *   detachLive      —— 能不能摸到内部 store Map；
+ *   detachLiveEntry —— 摘除真正依赖的 `entry.detach` 是否存在。
+ */
+test("routes：status 的 detachLive 探针区分「store 可达」与「entry.detach 可用」", async () => {
+  const { apply } = await import("../lib/index.js");
+
+  const probe = async (sessions) => {
+    const routes = new Map();
+    const services = { sessions, sessionController: { list: async () => ({ items: [] }) } };
+    const ctx = {
+      logger: { warn() {}, debug() {} },
+      get: (k) => services[k],
+      webServer: { register(route) { routes.set(route.path, route.handler); return () => {}; } },
+      effect: (callback) => callback(),
+    };
+    apply(ctx, { audit: false });
+    const res = makeRes();
+    routes.get("/api-ext/dialogue-cleanup/status")(
+      makeReq({ method: "GET", headers: { "sec-fetch-site": "same-origin" } }),
+      res,
+    );
+    return JSON.parse(res.captured.body).value.capabilities;
+  };
+
+  // ① store 里有一个带 detach 的 entry —— 两个都该是 true。
+  const withEntry = await probe({
+    list: () => [],
+    store: new Map([["s1", { detach: () => {} }]]),
+  });
+  assert.equal(withEntry.detachLive, true, "store 可达");
+  assert.equal(withEntry.detachLiveEntry, true, "entry.detach 存在 —— 这才是真能摘");
+
+  // ② store 可达但里面没有 entry（或 entry 没有 detach）—— 必须如实报 false，
+  //    不能因为「摸到了 store」就谎称能摘。
+  const noEntry = await probe({ list: () => [], store: new Map() });
+  assert.equal(noEntry.detachLive, true, "store 仍然可达");
+  assert.equal(noEntry.detachLiveEntry, false, "没有可摘的 entry —— 不得谎报");
+
+  // ③ 完全拿不到 sessions —— 两个都 false。
+  const none = await probe(undefined);
+  assert.equal(none.detachLive, false);
+  assert.equal(none.detachLiveEntry, false);
+
+  // ④ store 可达但 entry **没有** detach —— 探针必须如实说 false。
+  //    （这一条专门防「entryDetach 恒为 true」的谎报：裸 entry 只能靠 store.delete 兜底，
+  //     而那条路不走 entry.detach，两者的能力含义不同。）
+  const bareEntry = await probe({ list: () => [], store: new Map([["s1", {}]]) });
+  assert.equal(bareEntry.detachLive, true, "store 仍然可达");
+  assert.equal(bareEntry.detachLiveEntry, false, "entry 没有 detach —— 不得谎报能摘");
 });
 

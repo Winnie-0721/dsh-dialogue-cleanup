@@ -111,7 +111,8 @@ test("deleteSession：在严格 ctx 上走完事务（不因未注入服务抛�
 
   const result = await service.deleteSession("s1", { kind: "test" });
   assert.equal(result.ok, true, "缺少可选服务时应降级成功，而不是抛错");
-  assert.equal(result.value.detached, false, "拿不到 sessions 时如实报 false");
+  assert.equal(result.value.detached, false, "拿不到 sessions 时如实报 detached:false");
+  assert.equal(result.value.detach, "failed", "拿不到任何入口 → failed（不可降级成 absent）");
   assert.equal(result.value.workspaces, 0);
   assert.ok(Array.isArray(result.value.removedPaths));
   assert.equal(recorded.length, 1);
@@ -120,27 +121,51 @@ test("deleteSession：在严格 ctx 上走完事务（不因未注入服务抛�
 test("detachLiveStore：优先用公开服务方法", () => {
   let viaService = 0;
   const sessions = { detach: () => { viaService += 1; } };
-  assert.equal(detachLiveStore(sessions, "s1"), true);
+  assert.equal(detachLiveStore(sessions, "s1"), "detached");
   assert.equal(viaService, 1);
 });
 
 test("detachLiveStore：退而用内部 store Map 上的 entry.detach", () => {
   let called = 0;
-  const store = new Map([["s1", { detach: () => { called += 1; } }]]);
-  assert.equal(detachLiveStore({ store }, "s1"), true);
+  const store = new Map([["s1", { detach: () => { called += 1; store.delete("s1"); } }]]);
+  assert.equal(detachLiveStore({ store }, "s1"), "detached");
   assert.equal(called, 1);
 });
 
-test("detachLiveStore：拿不到任何入口时如实返回 false（不抛错，优雅降级）", () => {
-  assert.equal(detachLiveStore({ store: new Map() }, "s1"), false);
-  assert.equal(detachLiveStore({}, "s1"), false);
-  assert.equal(detachLiveStore(undefined, "s1"), false);
-  assert.equal(detachLiveStore(null, "s1"), false);
+/**
+ * 【回归 · 2026-10】三态语义必须区分开。
+ *
+ * 原来只有两态（true/false），把「本来就不在内存里」和「试了没摘掉」混为一谈。
+ * 真实宿主里 `sessions.list()` 就是 live 集合本身，删一个已关闭的会话时它
+ * **本来就不在 store 里**，旧逻辑把这句正常收尾显示成「内存条目未摘除（降级）」，
+ * 用户每次删旧会话都看到一句吓人的提示，反而盖住真正该关注的情况。
+ */
+test("detachLiveStore：本就不在 store 里时返回 absent（正常收尾，不是失败）", () => {
+  assert.equal(detachLiveStore({ store: new Map() }, "s1"), "absent");
 });
 
-test("detachLiveStore：内部入口抛错时降级为 false，不把异常抛给调用方", () => {
+test("detachLiveStore：拿不到任何入口时返回 failed（不可降级为 absent）", () => {
+  assert.equal(detachLiveStore({}, "s1"), "failed");
+  assert.equal(detachLiveStore(undefined, "s1"), "failed");
+  assert.equal(detachLiveStore(null, "s1"), "failed");
+});
+
+test("detachLiveStore：内部入口抛错时降级为 failed，不把异常抛给调用方", () => {
   const store = new Map([["s1", { detach: () => { throw new Error("boom"); } }]]);
-  assert.equal(detachLiveStore({ store }, "s1"), false);
+  assert.equal(detachLiveStore({ store }, "s1"), "failed");
+});
+
+/**
+ * 【回归 · 2026-10】`entry.detach()` 被调用但**没有真正移除**时必须报 failed。
+ *
+ * 依据 `detachEntered`（dsh-session/lib/types/index.js 第 935 行）：
+ *   `if (this.store.get(entry.id) !== entry) return;` —— id 不匹配时**静默返回**，
+ *   看起来调用了、其实什么都没删。旧实现在这里无条件 return true，属于谎报成功。
+ */
+test("detachLiveStore：entry.detach 调用后仍未移除 → failed（不谎报成功）", () => {
+  const store = new Map([["s1", { detach: () => {} }]]); // 什么都不做
+  assert.equal(detachLiveStore({ store }, "s1"), "failed");
+  assert.equal(store.has("s1"), true, "仍然在 store 里 —— 确实没摘掉");
 });
 
 test("detachWorkspaces：**不得**在 detachSession 缺失时虚增计数（修正上游 D7）", async () => {
@@ -386,8 +411,13 @@ test("回归：会话仍在宿主内存里时**不得**摘工作区归属（否�
   const services = {
     sessionController: { list: async () => ({ items: [{ sessionId, running: false, blank: false }] }) },
     agents: { get: () => undefined },
-    // 内存里**仍然**有它（detachLiveStore 找不到任何 store → 摘不掉）
-    sessions: { list: () => [{ id: sessionId }] },
+    // 内存里**仍然**有它：store 可达、entry 在，但 entry.detach 抛错 → 摘不掉。
+    // （真实宿主里 `store` 是 SessionStore 的实例字段，必须显式建模；
+    //   若写成 `{ list: ... }` 而不给 store，测的其实是「store 不可达」那条路。）
+    sessions: {
+      list: () => [{ id: sessionId }],
+      store: new Map([[sessionId, { detach: () => { throw new Error("cannot detach"); } }]]),
+    },
     workspaceRegistry: {
       list: () => [{ sessionIds: [sessionId], detachSession: async () => { detachedCalls += 1; } }],
       unpinSession: async () => { unarchiveCalls += 1; },
@@ -404,7 +434,8 @@ test("回归：会话仍在宿主内存里时**不得**摘工作区归属（否�
 
   const result = await service.deleteSession(sessionId, { kind: "test" });
   assert.equal(result.ok, true);
-  assert.equal(result.value.detached, false, "内存条目摘不掉时如实上报 false");
+  assert.equal(result.value.detached, false, "内存条目摘不掉时如实上报 detached:false");
+  assert.equal(result.value.detach, "failed", "且三态明细必须是 failed（不是 absent）");
   assert.equal(result.value.keptWorkspaceMembership, true, "必须标记归属被保留");
   assert.equal(detachedCalls, 0, "会话还在内存里 → **不得**摘归属（否则会落到「未分组」）");
   assert.equal(unarchiveCalls, 0, "同理不动注册表，避免留下指向内存行的 pin/archive");
@@ -422,8 +453,8 @@ test("回归：会话确实已从宿主内存消失时才摘归属（正常收�
     // 语料里已经没有它
     sessionController: { list: async () => ({ items: [] }) },
     agents: { get: () => undefined },
-    // 内存里也没有它（store 可达且为空 → detachLiveStore 报 false，但集合里本就没有）
-    sessions: { list: () => [] },
+    // 内存里也没有它：store 可达但里面没有这个 id → detachLiveStore 报 absent。
+    sessions: { list: () => [], store: new Map() },
     workspaceRegistry: {
       list: () => [{ sessionIds: [sessionId], detachSession: async () => { detachedCalls += 1; } }],
       unpinSession: async () => {},
@@ -440,6 +471,8 @@ test("回归：会话确实已从宿主内存消失时才摘归属（正常收�
 
   const result = await service.deleteSession(sessionId, { kind: "test" });
   assert.equal(result.ok, true);
+  assert.equal(result.value.detached, false);
+  assert.equal(result.value.detach, "absent", "本就不在内存里 → absent（正常收尾，不是失败）");
   assert.equal(result.value.keptWorkspaceMembership, false, "内存里没有它 → 不必保留归属");
   assert.equal(detachedCalls, 1, "确实不在内存里 → 正常摘归属收尾");
   assert.equal(result.value.workspaces, 1);
@@ -448,18 +481,18 @@ test("回归：会话确实已从宿主内存消失时才摘归属（正常收�
 test("detachLiveStore：遍历候选 store 承载位置，且只认 Map 语义", () => {
   // _store 兜底位置
   let called = 0;
-  const alt = new Map([["s1", { detach: () => { called += 1; } }]]);
-  assert.equal(detachLiveStore({ _store: alt }, "s1"), true);
+  const alt = new Map([["s1", { detach: () => { called += 1; alt.delete("s1"); } }]]);
+  assert.equal(detachLiveStore({ _store: alt }, "s1"), "detached");
   assert.equal(called, 1);
 
   // 非 Map 的假 store（只有 get）不得被当成 store 用
-  assert.equal(detachLiveStore({ store: { get: () => ({ detach() {} }) } }, "s1"), false);
+  assert.equal(detachLiveStore({ store: { get: () => ({ detach() {} }) } }, "s1"), "failed");
 
-  // store 存在但没有这个 id → 如实 false（不谎报摘除成功）
-  assert.equal(detachLiveStore({ store: new Map() }, "s1"), false);
+  // store 存在但没有这个 id → absent（本就不在内存里，正常收尾）
+  assert.equal(detachLiveStore({ store: new Map() }, "s1"), "absent");
 
   // 没有 detach 的裸 entry → 直接 store.delete 兜底
   const bare = new Map([["s1", {}]]);
-  assert.equal(detachLiveStore({ store: bare }, "s1"), true);
+  assert.equal(detachLiveStore({ store: bare }, "s1"), "detached");
   assert.equal(bare.has("s1"), false, "裸 entry 也必须真的从 store 里删掉");
 });

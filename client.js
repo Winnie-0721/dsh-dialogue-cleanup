@@ -66,6 +66,9 @@ window.__ModuleLoader__.load({
         "confirm.cancel": "取消",
         "done.title": "已删除会话",
         "done.detached": "内存条目已摘除",
+        // 会话本来就不在宿主内存里（已关闭/已释放）—— 这是**正常收尾**，不是降级。
+        // 真实宿主里 `sessions.list()` 就是 live 集合本身，删旧会话时绝大多数落在这里。
+        "done.detachedAbsent": "内存中已无此会话（无需摘除，属正常收尾）",
         "done.detachedNo": "内存条目未摘除（降级：只删了磁盘）",
         "done.keptGroup": "已保留它原有的工作区分组：会话仍在宿主内存里，此时摘掉归属会让它变成侧栏的「未分组」幽灵行。",
         "done.workspaces": "工作区记录：{count}",
@@ -165,6 +168,10 @@ window.__ModuleLoader__.load({
         "confirm.cancel": "Cancel",
         "done.title": "Session deleted",
         "done.detached": "Live store entry detached",
+        // The session was not in the host's live store at all (already closed/released) —
+        // that is a normal finish, not a degradation. On the real host `sessions.list()`
+        // *is* the live set, so deleting an old session lands here almost every time.
+        "done.detachedAbsent": "No live entry to detach (normal finish)",
         "done.detachedNo": "Live store entry NOT detached (degraded: disk only)",
         "done.keptGroup": "Its workspace group membership was kept: the session is still in the host's live store, and detaching it now would leave a \"Ungrouped\" ghost row in the sidebar.",
         "done.workspaces": "Workspace records: {count}",
@@ -992,7 +999,19 @@ window.__ModuleLoader__.load({
       } else if (state.result !== null) {
         const v = state.result;
         const rows = [];
-        rows.push(h("li", { key: "detached" }, v.detached === true ? t("done.detached") : t("done.detachedNo")));
+        // 内存条目三态：detached（摘掉了）/ absent（本就不在内存里，正常收尾）/ failed（真降级了）。
+        //
+        // 【修正 · 原来只有 `v.detached === true ? … : …` 两态】真实宿主里
+        // `sessions.list()` 就是 live 集合本身，删一个已关闭的会话时它「本来就不在内存里」，
+        // 旧逻辑会把这句正常收尾显示成「内存条目未摘除（降级：只删了磁盘）」——
+        // 用户每次删旧会话都看到一句吓人的降级提示，反而盖住真正该关注的情况。
+        if (v.detached === true) {
+          rows.push(h("li", { key: "detached" }, t("done.detached")));
+        } else if (v.detach === "absent") {
+          rows.push(h("li", { key: "detachedAbsent" }, t("done.detachedAbsent")));
+        } else {
+          rows.push(h("li", { key: "detachedNo" }, t("done.detachedNo")));
+        }
         // 归属被**故意保留**时说明原因：这不是失败，而是为了不让该行变成「未分组」孤儿。
         if (v.keptWorkspaceMembership === true) {
           rows.push(h("li", { key: "keptGroup" }, t("done.keptGroup")));

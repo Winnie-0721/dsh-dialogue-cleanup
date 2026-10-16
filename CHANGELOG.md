@@ -1,5 +1,73 @@
 # 变更记录
 
+## 未发布
+
+### 修复：删除结果把「本就不在内存里」误报成「摘除失败」
+
+**现象**：删掉一个已关闭的旧会话后，结果弹窗每次都显示
+「内存条目未摘除（降级：只删了磁盘）」——一句吓人的降级提示。
+
+**根因是 `detachLiveStore` 只有两态（true/false），把两种完全不同的情况混为一谈。**
+
+读了宿主的真实实现后确认（`@deepseek-ai/dsh-session/lib/types/index.js`）：
+
+- `sessions.list()` 的实现是 `[...this.store.values()].map(entry => entry.session)`
+  —— 它**就是 live 集合本身**，不是持久化语料；
+- `SessionStore` 的公开面只有 `create / prepare / enter / announce / flush / get / list / fork`，
+  **没有** `detach / release / close`。所以旧代码分支①（遍历这三个方法名）在真实宿主里
+  是**死代码**，真正走的只有分支②（`store` Map + `entry.detach`）。
+
+于是删一个已关闭的会话时，它「本来就不在 store 里」，旧逻辑把这个**正常收尾**
+显示成了「降级」。
+
+**修法**：返回值改成三态，并让界面分别渲染。
+
+| 值 | 含义 | 界面文案 |
+|---|---|---|
+| `detached` | 确实摘掉了 | 内存条目已摘除 |
+| `absent` | 本来就不在内存里 —— **正常收尾** | 内存中已无此会话（无需摘除，属正常收尾） |
+| `failed` | 本来在内存里、但没摘掉 —— 真的降级 | 内存条目未摘除（降级：只删了磁盘） |
+
+顺带修掉两处相关的**谎报**：
+
+1. `entry.detach()` 被调用后**再确认一次**它真的移除了。依据 `detachEntered()`
+   第 940 行的 `if (this.store.get(entry.id) !== entry) return;` —— id 不匹配时
+   **静默返回**，看起来调用了、其实什么都没删。旧实现在这里无条件返回成功。
+2. `capabilities()` 的探针拆成 `detachLive`（store 可达）与 `detachLiveEntry`
+   （`entry.detach` 存在）两问。旧探针只回答「`store.get` 是不是函数」，
+   在真实宿主里**恒为 true**，于是 `/status` 一直显示「能摘内存」，
+   而审计日志里 11 次删除**全部** `detached:false` —— 探针的答案与事实不符，
+   排障时反而误导。
+
+### 性能：清单排序不再用 localeCompare
+
+实测（本机，5000 行 ISO-8601 字符串）：
+
+```
+localeCompare 9–15 ms  →  直接 < / > 比较 0–1 ms      （约 9–15 倍）
+```
+
+两个排序键（`createdAt` / `updatedAt`）在上游就已经是
+`new Date(...).toISOString()` 的结果，ISO-8601 的定长格式保证
+**字典序 == 时间序**，因此完全不需要 locale 感知比较。
+降序只需把比较结果反向；键仍先归一化成字符串（非字符串一律退化成 `""`），
+与原来的 `String(k ?? "")` 语义一致。
+
+### 文档：删除事务顺序说明已与代码同步
+
+`createService` 上方的注释还在描述「先摘工作区归属、后删磁盘工件」的**旧顺序**，
+与 1.0.2 修正后的实现相反。已改成实际顺序，并写清 5 在 6/7 之前的原因。
+
+### 验证
+
+- 全量测试 **170/170 通过**（新增 5 条回归）。
+- 变异测试 **6/7 命中**；唯一存活的变异经实测证明是**语义等价**的
+  （去掉 `typeof` 兜底后，只有在键恰为 `""` 时才与现实现分歧，
+  而 `toISOString()` 永远不产出空串），不是测试漏洞。
+- 另用一份**忠于 asar 原文**的 `SessionStore` 复刻（`enter` / `detachEntered` /
+  `list` / `get` 逐行对照）跑通完整删除事务：`detached=true`、归属被摘掉、
+  幂等重删得到 `absent`、空 store 下探针如实报 `detachLiveEntry:false`。
+
 ## 1.0.2
 
 ### 修复：删掉的会话会以「未分组」的形式再次出现
