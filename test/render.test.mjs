@@ -764,6 +764,87 @@ test("渲染：筛选区用定宽网格 + 列表用卡片行（布局回归）",
   assert.equal(row.children[0]?.type, "input", "勾选框必须在最左");
 });
 
+/**
+ * 【核心功能回归】选一项下拉，必须真的改变查询并重发请求。
+ *
+ * 为什么单独一条：把原生 select 换成「药丸 + 内联 Menu」之后，
+ * 值的传递从浏览器的 onChange(event.target.value) 变成我们自己接的
+ * onSelect → props.onChange(value)。中间任何一环写错（比如忘了调 onChange、
+ * 或把 label 当 value 传出去），**界面看着完全正常**——药丸上会显示新文字
+ * （因为 activeLabel 是从 options 找出来的），但请求参数没变，
+ * 用户以为筛了、实际没筛。上一轮的级联断言就是这类"看着绿其实没接上"的教训。
+ *
+ * 所以这里不看样式，只看**发出去的那个 URL**。
+ */
+test("渲染：从下拉选一项必须改变请求参数并重发", async () => {
+  const urls = [];
+  const listBody = {
+    ok: true,
+    value: {
+      total: 0,
+      page: { page: 1, pageSize: 50, pages: 1 },
+      items: [],
+      projects: ["E:\\proj-a", "E:\\proj-b"],
+      archived: { filter: "show", total: 0, known: true, subagentTotal: 0 },
+      kind: { filter: "main", subagentTotal: 0, mainTotal: 0 },
+      titles: { requested: 0, cached: 0, fetched: 0, failed: 0, truncated: 0, skipped: false },
+      tookMs: 1,
+    },
+  };
+  const app = boot({
+    hostActive: "zh",
+    fetchImpl: async (url) => {
+      urls.push(String(url));
+      return { status: 200, json: async () => listBody };
+    },
+  });
+  const entry = app.byName.get(SECTION_SLOT);
+  const paint = () => {
+    app.beginRender();
+    return app.render(app.React.createElement(entry.component, { close: () => {} }));
+  };
+
+  paint();
+  app.flushEffects();
+  await new Promise((r) => setTimeout(r, 0));
+  assert.ok(urls.length >= 1, "首屏必须发出一次列表请求");
+  // 默认 kind=main ⇒ URL 里带 kind=main。
+  assert.match(urls[urls.length - 1], /kind=main/, "默认请求必须带 kind=main");
+
+  // 展开「会话类型」并选「全部（含子代理）」。
+  const tree = paint();
+  const kind = filterFields(app, tree).find((f) => f.label === "会话类型");
+  assert.ok(kind, "必须渲染出「会话类型」字段");
+  const opened = openDropdown(app, kind);
+  const items = (opened.menu.children ?? []).filter(
+    (c) => typeof c?.props?.className === "string" && c.props.className.includes("dscc-menu-item"),
+  );
+  const allItem = items.find((c) => collectText(c).join("").includes("全部"));
+  assert.ok(allItem, "下拉里必须有「全部（含子代理）」这一项");
+
+  allItem.props.onClick(); // 选中
+  // 【顺序很重要】这个替身里 effect 是在 render 阶段**收集**、由 flushEffects 执行。
+  // 所以必须先重渲染一次（让组件体带着新 params 跑一遍、把新 effect 登记上），
+  // 再 flush。反过来（先 flush 再渲染）跑的是上一轮的 effect，
+  // 参数永远是旧值 —— 我第一次写就踩了这个。
+  paint();
+  app.flushEffects();
+  await new Promise((r) => setTimeout(r, 0));
+
+  const last = urls[urls.length - 1];
+  assert.match(last, /kind=all/, `选中后必须重发 kind=all 的请求，实际 URL：${last}`);
+  assert.doesNotMatch(last, /kind=main/, "不得仍然带着旧值 main");
+
+  // 药丸上显示的文字必须跟着变（用户复核自己筛的是什么）。
+  const after = paint();
+  const kindAfter = filterFields(app, after).find((f) => f.label === "会话类型");
+  assert.match(
+    collectText(selectorOf(kindAfter)).join(""),
+    /全部/,
+    "选择后药丸必须显示新值（用户要能复核当前筛选）",
+  );
+});
+
 /** 上面用到 await0 只是为了保持同步；这里做 CSS 层的断言（读源码文本）。 */
 test("布局 CSS：筛选网格标签列与控件列都定宽，行内容可省略", async () => {
   const { readFile } = await import("node:fs/promises");

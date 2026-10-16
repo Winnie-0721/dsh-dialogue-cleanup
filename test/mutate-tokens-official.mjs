@@ -74,6 +74,10 @@ const MUTANTS = [
   ["G3 按钮高度退回 32px", ["  height: 36px; padding: 0 14px;\n  border: none; border-radius: var(--dsw-radius-md);", "  height: 32px; padding: 0 14px;\n  border: none; border-radius: var(--dsw-radius-md);"]],
   ["G4 小按钮高度退回 24px", [".dscc-btn-small { height: 28px;", ".dscc-btn-small { height: 24px;"]],
   ["G5 徽标内边距退回 1px 7px", ["  border-radius: 999px; corner-shape: round;\n  padding: 1px 8px;", "  border-radius: 999px; corner-shape: round;\n  padding: 1px 7px;"]],
+  // 选中一项却不把值传出去：药丸仍会显示新文字（activeLabel 从 options 找），
+  // 所以**只看样式的测试全都会绿** —— 这条专门验证新加的功能测试真的能咬。
+  ["G6 选中一项但不改变筛选", ["        if (option.value !== props.value && typeof props.onChange === \"function\") {\n          props.onChange(option.value);\n        }", "        if (false) {\n          props.onChange(option.value);\n        }"]],
+  ["G7 把 label 当 value 传出去", ["          props.onChange(option.value);", "          props.onChange(option.label);"]],
 ];
 
 let killed = 0;
