@@ -1,6 +1,6 @@
 {
   "name": "dsh-dialogue-cleanup",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "description": "Delete DeepSeek Harness sessions from the running Web runtime: detach the live store entry, drop workspace records, and remove the on-disk artifacts. Host half plus a web client half in one package.",
   "keywords": [
     "deepseek",
