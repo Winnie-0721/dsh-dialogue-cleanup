@@ -2,6 +2,106 @@
 
 ## 未发布
 
+### 界面统一（第二轮）：用真正的官方令牌，并干掉原生 select
+
+用户反馈第一轮换皮后「UI 还是不统一」。这一轮实测定位到**三个真实原因**并全部修掉，
+其中第一个是我上一轮自己造成的。
+
+#### 原因一（根因）：我误判一批令牌"不存在"，把它们换算成了字面值
+
+上一轮我以 `Theme.listTokens` 的 14 条为准，判定 `--dsw-radius-*` /
+`--dsw-alias-interactive-bg-*` / `--dsw-alias-button-*` 等名字"不在表里所以不能用"，
+于是把圆角写成 `12px`、悬停底色写成 `bg-layer-2`。**那个前提是错的。**
+
+实测（`npx @electron/asar extract` 后逐个字符串核对
+`@deepseek-ai/dsh-client-ui-theme/lib/client.js`）：
+
+- inspect 的 14 条只是**子集**；真正的令牌表由 ui-theme 在运行时整表注入；
+- 颜色类令牌 `defs=2`（明暗两套主题各定义一次），几何类 `defs=1`（全局单值：
+  radius xs=4 / sm=8 / md=12 / lg=16 / xl=20 / panel=28）；
+- 本文件用到的 **40 个令牌里 38 个真实存在**；另外两个
+  （`--dsh-frame-overlay-top` / `--dsh-frame-chrome-top`）由 `dsh-client-ui-layout`
+  在桌面壳里注入 —— 官方 CSS 用它们时也一律带 fallback，本文件写法与官方逐字一致。
+
+抄字面值 = 把官方尺度硬编码进插件，主题一改就分叉，观感自然差一档。
+这一轮全部改回官方令牌，并把「哪个令牌实测等于多少像素」写进测试（`TOKEN_SCALES`），
+令牌被换成别的档位时会红。
+
+顺带实测确认：**官方自己有两个悬空引用** —— `--dsw-transition-duration` /
+`--dsw-ease-in-out` 在 primitives 的 CSS 里被引用，但主题包**没有定义**。
+所以本文件的动画时长写字面值 `.2s` / `cubic-bezier(.4,0,.2,1)`，
+并加断言禁止跟随这两个悬空引用。
+
+#### 原因二：卡片不靠底色区分，靠描边 + 圆角 + 层级
+
+上一版把卡面从 `bg-layer-1` 换成 `bg-layer-2` —— 而实测**浅色主题下
+`bg-base` / `bg-layer-1` / `bg-layer-2` 三个值完全相同**（都是 `neutral-bluish-00`）。
+等于什么都没换：卡片与页面同色、只剩一圈描边，看着就是"贴了个框"。
+
+官方设置页里的同类列表（`dsh-client-ui-settings-plugin-inventory`，与本面板同在
+设置页）的做法是 `0.5px settings-card-stroke` + `radius-xl` + `settings-card-fill` +
+悬停换 `interactive-bg-hover`。整套照抄。
+
+#### 原因三：五个原生 select 还留着（最显眼的那个）
+
+原生 select 的下拉面板由**操作系统**绘制 —— 直角、系统描边、不跟随主题。
+
+官方在同一个设置页里怎么做一个下拉？`dsh-client-locale` 的语言行
+（`LanguageRow.module.css`）：不是 select，而是一个 **button 药丸**
+（`radius-md` / `bg-module-platform` / 36px 高 / `gap 12px` / 14px-22px）
+挂 `aria-haspopup=menu`，点开 primitives 的 **Menu**。五个筛选下拉全部换成这个形态。
+
+**R-22 边界**：官方语言行用 `portal: true`（createPortal 到 document.body），
+那是 R-22 禁止的。官方 Menu 本身支持**非 portal** 形态（`position:absolute`
+贴在触发器下方）—— 用它，既拿到官方观感与键盘语义，又不往 body 挂东西。
+
+官方 Menu 的键盘语义一并拷齐：打开聚焦选中行、↑/↓/Home/End 游走、Tab 落在当前行
+并关闭、Esc 关闭并把键盘还给触发器、选中行尾部一枚勾（`aria-checked`）。
+
+其余对齐：搜索框换成官方 Input 的 wrap 两层结构（前置图标 + `0.5px l4` 描边 +
+聚焦光晕走 `color-mix 18%` 而不是 outline）；遮罩换成官方
+`backdrop-filter: mask-blur` + `bg-mask-1`（上一版是自己 `color-mix(bg-base 45%)` 凑的）；
+弹窗卡片 `radius-panel` + `elevation-prominent`；菜单项、分隔线，以及
+chevron / close / check / search 四枚图标的路径数据全部对齐官方原值。
+
+### 测试口径更正：R-24 的允许表从 14 条改为实测表
+
+旧断言「只用 Theme.listTokens 的 14 条」正是原因一的**帮凶** ——
+它把真实存在的官方令牌判成违规，逼着实现去写字面值。现在允许表按实测重写，
+并新增三条反向断言：禁止跟随官方那两个悬空引用；桌面框令牌**必须带 fallback**；
+CSS 里 hex 与 `rgb(a)` 字面色清零（连阴影也走 elevation 令牌）。
+
+### 本轮变异测试真实抓到的两个 bug
+
+**① 一条死规则**：搜索框换成 wrap 两层后，`.dscc-input.dscc-filters-search`
+再也匹配不到任何元素，而它的级联断言**只读 CSS 文本、不看 DOM**，于是测试照样绿。
+修法：规则与类名一起挪到真正占格子的外层 `.dscc-search`，并加一条 **DOM 断言**
+（核对渲染出的元素确实同时挂这两个类）。
+
+**② 又四条死规则**：①暴露这类问题后做了全量核对，又扫出
+`.dscc-card-surface`、`.dscc-check`、`.dscc-list-head`、`.dscc-panel-result`
+（后两条早于本次改动就存在）。全部清掉；`.dscc-check` 是本轮新写的官方 Checkbox
+那层 label —— 本插件行旁就是标题，再插一个可见标签会重复，所以只取官方给 input
+的样式落到 `.dscc-row-check`。**防线**：新增「死规则防线」测试，全量核对 CSS 里
+每个 `.dscc-*` 类都必须出现在 JSX 侧，并用变异 G1 验证它真的会咬。
+
+### 验证
+
+- **测试 180 / 180 通过**
+- **变异测试 43 / 43 全部击杀，0 存活**（`test/mutate-tokens-official.mjs`，手动运行）：
+  T1–T10 令牌退回字面值/近似/悬空引用/丢 fallback；S1–S8 选择器药丸与内联 Menu；
+  D1–D2 死规则（本轮真实 bug）；F1–F11 既有实测修复与官方几何；
+  K1–K7 官方 Modal 键盘与焦点语义；G1–G5 防线自身与基础几何。
+  其中 **G2「勾选框焦点环」先存活、补断言后才击杀** —— 这正是变异测试的价值。
+- 第一轮的变异脚本 `mutate-official-form.mjs` 已删除：它的查找串针对的是
+  "字面值那一版"的 CSS，本轮改完后 7/18 变成 SKIP，留着只会报出误导性的
+  "survived 7"。其覆盖的键盘/焦点语义已全部并入新脚本（K1–K7）。
+- 四条既有实测修复逐条保留，每条都有断言 + 变异钉住。
+
+---
+
+## 未发布（上一轮：官方形态第一轮）
+
 ### 界面改版：控件与弹窗全部换成官方形态（R-23 正路）
 
 **动机**：用户要求「调用官方卡片接口和布局，参考另一个插件（插件市场）的操作流程」。

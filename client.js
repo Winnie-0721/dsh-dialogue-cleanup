@@ -424,378 +424,749 @@ window.__ModuleLoader__.load({
 
     // ─── 样式（只引用 --dsw-alias-* 令牌；随组件卸载一起消失，R-29） ─────────
     const CSS = `
-/* ───────────── 会话行 ⋮ 菜单项 ───────────── */
+/* ═══════════════════════════════════════════════════════════════════════
+   官方形态样式表 —— 每一条几何/颜色都注有官方出处。
+
+   【为什么是"抄"而不是"调包"】R-23 禁止把官方包当模块 require，
+   同一条规则紧接着给的正路是：copy markup, CSS, and behavior from the
+   primitive into the plugin … rename copied classes under your plugin's
+   prefix, keep only --dsw-alias-* token references, and keep the behavior
+   users rely on. 类名一律加 dscc- 前缀。
+
+   【令牌表 · 已实测更正】上一轮我以为 --dsw-radius-* /
+   --dsw-alias-interactive-bg-* / --dsw-alias-button-* 这些名字"不在
+   Theme.listTokens 的 14 条里所以不能用"，于是把圆角和悬停底色换算成了
+   字面值 —— **那个判断是错的，也正是这一版界面看起来仍不统一的根因**。
+   实测：这些令牌全部真实存在，由 @deepseek-ai/dsh-client-ui-theme 在
+   运行时注入（inspect 的 14 条只是子集）。逐个核对结果：
+     · 颜色类令牌 defs=2 ⇒ 明暗两套主题各定义一次，可安全使用；
+     · 几何类令牌 defs=1 ⇒ 全局单值（--dsw-radius-xs=4px / sm=8px /
+       md=12px / lg=16px / xl=20px / panel=28px），两主题共用。
+   确认真不存在的只有 --dsw-transition-duration / --dsw-ease-in-out
+   （官方 CSS 里引用了它们，但主题包没定义 —— 那是官方的悬空引用，
+   所以这里的动画时长一律写字面值 .2s / cubic-bezier(.4,0,.2,1)）。
+
+   【本插件的四条实测修复，换皮不得弄丢】
+     1. 按钮文字 nowrap —— 否则「刷新」被压成「刷/新」两行；
+     2. 悬停换底只作用于中性按钮 —— 否则实心按钮悬停即"文字消失"（对比度≈0）；
+     3. 主内容列 min-width:0 —— 否则标题省略号不生效；
+     4. 卡片行内不得 break-all —— 否则中文标题逐字符折断。
+
+   ⚠ 本注释及下面所有注释内都不得出现反引号 —— CSS 在 JS 模板串里，
+     一个反引号就提前终止模板串（已因此踩坑多次）。
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* ───────────── 会话行 ⋮ 菜单项 ─────────────
+   官方出处：primitives Menu.module.css 的 .item（菜单里的标准一行）。
+   min-height 34px / padding 6px 8px / radius md / 13px-20px。
+   官方把「悬停换底」与「键盘聚焦换底」做成同一底色且聚焦时去掉默认描边
+   （fill 本身就是聚焦指示），这里照抄。 */
 .dscc-menu-row {
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: center; gap: 6px;
   width: 100%; box-sizing: border-box;
-  padding: 7px 10px; margin: 0; border: 0;
-  border-radius: 6px; background: transparent;
+  min-height: 34px; padding: 6px 8px; margin: 0; border: 0;
+  border-radius: var(--dsw-radius-md); background: transparent;
   color: var(--dsw-alias-label-primary);
-  font: inherit; font-size: 13px; line-height: 18px;
+  font: inherit; font-size: 13px; line-height: 20px;
   text-align: left; cursor: pointer;
 }
-.dscc-menu-row:hover { background: var(--dsw-alias-bg-layer-2); }
-.dscc-menu-row:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: -2px; }
-.dscc-menu-row[disabled] { color: var(--dsw-alias-label-secondary); cursor: default; }
-.dscc-menu-row-icon { flex: none; width: 14px; height: 14px; display: block; }
-/* slot 契约要求一个 role="menuitem" 的 button；官方用 separatorBefore 起一组，
-   这里用一条分隔线达到同样的视觉分组效果。 */
-.dscc-sep { margin: 4px 8px 5px; border-top: 1px solid var(--dsw-alias-border-l1); }
-
-    // ─── 官方形态控件（dscc- 前缀） ───────────────────────────────────────
-    //
-    // 【这些规则从哪来 · R-23 的正确口径】
-    // R-23 禁止的是把官方包当模块加载（require 那个 primitives 包）。
-    // 同一条规则紧接着给了**正路**：
-    //   「Write your own controls and match the host instead: copy markup, CSS,
-    //     and behavior from the primitive into the plugin … Rename copied
-    //     classes under your plugin's prefix, keep only --dsw-alias-* token
-    //     references, and keep the behavior that users rely on, such as Modal
-    //     focus and Escape handling …」
-    // 所以这里的几何/层级/交互**逐条照官方抄**，类名全部加 dscc- 前缀，
-    // 颜色只留 --dsw-alias-* 令牌。官方那套 --dsw-radius-* /
-    // --dsw-alias-interactive-bg-* / --dsw-alias-button-* 名字
-    // **不在**现场 Theme.listTokens 的 14 个令牌里（R-24），
-    // 因此半径/悬停底色一律换算成令牌表达，不引入不存在的名字。
-    //
-    // ⚠ 本注释与下面所有注释内都**不得出现反引号** —— CSS 在 JS 模板串里，
-    //   一个反引号就提前终止模板串（已因此踩坑多次）。
-    //
-    // 【已保留的本插件实测修复】下面每条都曾是真 bug，换皮不得弄丢：
-    //   1. 按钮文字 nowrap —— 否则「刷新」被压成「刷/新」两行；
-    //   2. hover 换底只作用于中性按钮 —— 否则实心按钮悬停即"消失"（对比度≈0）；
-    //   3. 主内容列 min-width:0 —— 否则标题省略号不生效；
-    //   4. 卡片行内不得 break-all —— 否则中文标题逐字符折断。
-    //
-    // 官方 Button 尺寸刻度：md=36px 高 / 12px 圆角，sm=28px 高 / 8px 圆角。
-    // 圆角用官方同一族尺度，但没有 --dsw-radius-* 令牌，故直接写字面值，
-    // 并注明它对应官方哪一档（字面几何不是"颜色"，不受 R-24 约束）。
-
-    // ───────────── 按钮：官方 Button（ghost / primary / danger / sm） ─────────────
-    .dscc-btn {
-      box-sizing: border-box;
-      display: inline-flex; align-items: center; justify-content: center; gap: 4px;
-      border: none; border-radius: 12px; /* 官方 md 圆角 */
-      cursor: pointer;
-      font: inherit; font-size: 14px; line-height: 22px;
-      color: var(--dsw-alias-label-primary);
-      background: transparent;
-      padding: 0 14px; height: 36px;
-      /* 【实测修复 1】按钮文字不得折行：中文可在任意字符处断行，
-         一旦按钮被 flex 压到 min-content（= 一个字宽），文字就会竖排。 */
-      white-space: nowrap;
-    }
-    .dscc-btn:disabled { cursor: not-allowed; opacity: 0.4; }
-    /* 悬停底色：官方 ghost 用 interactive-bg-hover；该令牌不在现场全表里，
-       用 bg-layer-2 达到同一观感（次级浮层底色）。 */
-    .dscc-btn:not(.dscc-btn-primary):not(.dscc-btn-danger):not(:disabled):hover {
-      background: var(--dsw-alias-bg-layer-2);
-    }
-    .dscc-btn:not(.dscc-btn-primary):not(.dscc-btn-danger):not(:disabled):active {
-      background: var(--dsw-alias-bg-layer-1);
-    }
-    /* 【实测修复 2】实心变体悬停只做亮度微调：文字与背景同时等比变化，
-       对比度保持。旧版 hover 换底（优先级 0,2,0）压过变体实心背景（0,1,0），
-       结果是浅色面 + 底色文字 ⇒ 鼠标一移上去文字就"消失"。 */
-    .dscc-btn-primary:hover:not(:disabled),
-    .dscc-btn-danger:hover:not(:disabled) { filter: brightness(1.12); }
-    .dscc-btn:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 1px; }
-    .dscc-btn-primary {
-      background: var(--dsw-alias-brand-primary);
-      color: var(--dsw-alias-bg-base);
-    }
-    /* 破坏性主操作：官方没有 danger 实心档（它的 Tag/StateDot 才分 danger），
-       这里沿用本插件既有的 error 令牌实心底，与官方"状态色即语义色"一致。 */
-    .dscc-btn-danger {
-      background: var(--dsw-alias-state-error-primary);
-      color: var(--dsw-alias-bg-base);
-    }
-    /* 官方 sm 刻度：28px 高 / 12px 字 / 8px 圆角，行内操作用它。 */
-    .dscc-btn-small { height: 28px; font-size: 12px; line-height: 18px; padding: 0 10px; border-radius: 8px; }
-
-    // ───────────── 徽标：官方 Tag（outline / 状态色底纹） ─────────────
-    // 官方 Tag 的形态：999px 全圆角、11px/17px、500 字重、nowrap；
-    // 状态色 tone 用 color-mix 10% 自着色底 + 同色文字（一次换色，底与字一起动）。
-    .dscc-badge {
-      display: inline-flex; align-items: center;
-      border-radius: 999px; padding: 1px 8px;
-      font-size: 11px; line-height: 17px; font-weight: 500;
-      white-space: nowrap;
-      /* outline = 官方默认档：细边 + 次级文字色。 */
-      border: 0.5px solid var(--dsw-alias-border-l2);
-      color: var(--dsw-alias-label-secondary);
-    }
-    .dscc-badge-ok {
-      border-color: transparent;
-      background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 10%, transparent);
-      color: var(--dsw-alias-state-success-primary);
-    }
-    .dscc-badge-running {
-      border-color: transparent;
-      background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 12%, transparent);
-      color: var(--dsw-alias-state-warn-primary);
-    }
-    .dscc-badge-archived {
-      border-color: transparent;
-      background: color-mix(in srgb, var(--dsw-alias-state-idle-primary) 10%, transparent);
-      color: var(--dsw-alias-state-idle-primary);
-    }
-    .dscc-badge-subagent {
-      border-color: transparent;
-      background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 12%, transparent);
-      color: var(--dsw-alias-state-warn-primary);
-    }
-
-    // ───────────── 卡片：官方卡面（浮层底 + 面板级圆角） ─────────────
-    // 官方 Modal 的卡片用「次级浮层底 + 面板级圆角 + prominent  elevation」。
-    // 令牌全表里没有 --dsw-radius-panel / --dsw-elevation-prominent，
-    // 圆角取官方同族最大值 16px，阴影按字面色处理（R-24 只限颜色，
-    // 而 rgba(0,0,0,*) 是唯一被允许的字面阴影，见下方 R-24 测试的豁免口径）。
-    .dscc-card,
-    .dscc-row,
-    .dscc-filters,
-    .dscc-panel-bulk,
-    .dscc-panel-result,
-    .dscc-panel-state {
-      border: 1px solid var(--dsw-alias-border-l1);
-      border-radius: 16px;
-      background: var(--dsw-alias-bg-layer-2);
-    }
-
-/* 【实测修复 · 弹窗不置顶】
-   旧实现只靠 position:fixed + inset:0，**没有 z-index**，而本插件是从**设置页**
-   打开的，设置面板本身是一个高层级浮层；shell.overlay 里的普通定位元素盖不过它
-   —— 于是确认框「弹了但不在最上面」。
-
-   修法见紧接的 .dscc-modal：官方 Modal 同样不用原生 dialog，
-   而是 position:fixed + z-index:1000 + 自己管焦点与 Esc。 */
-/* ───────────── 弹窗（官方 Modal 形态） ─────────────
-   【为什么不是原生 dialog】官方 Modal 用的是 div + position:fixed + z-index，
-   而不是 <dialog> + showModal()。理由与取舍见 useModalLayer 的注释：
-   焦点陷阱与 Esc 自己实现，才能做到「busy 时 Esc 不关」这条确定分支。
-   z-index 取 1000（与官方 Modal 同值）：它高于设置面板等高层级浮层，
-   这正是用户实测「弹了但不在最上面」的旧伤的修法。 */
-.dscc-modal {
-  position: fixed; inset: 0; z-index: 1000;
-  display: flex; align-items: center; justify-content: center;
-  padding: 24px;
-  pointer-events: auto;
+.dscc-menu-row:hover:not(:disabled),
+.dscc-menu-row:focus-visible:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); }
+.dscc-menu-row:focus-visible { outline: none; }
+.dscc-menu-row:disabled { opacity: 0.4; cursor: not-allowed; }
+/* 官方 .itemIcon：14px，颜色走 menu-icon 令牌。 */
+.dscc-menu-row-icon {
+  display: inline-flex; flex: none;
+  width: 14px; height: 14px; align-items: center; justify-content: center;
+  color: var(--dsw-alias-menu-icon);
 }
-/* 遮罩铺满浮层；底色用 bg-base 的 45% 混合（官方 bg-mask-1 不在现场令牌全表）。 */
-.dscc-scrim {
-  position: absolute; inset: 0; pointer-events: auto;
-  display: flex; align-items: center; justify-content: center;
-  padding: 24px;
-  background: color-mix(in srgb, var(--dsw-alias-bg-base) 45%, transparent);
-}
-.dscc-card {
-  width: min(460px, 100%); box-sizing: border-box;
-  background: var(--dsw-alias-bg-overlay);
+/* 官方 .separator：0.5px 高、上下 3px、用 l2（l1 在这张面上几乎看不见）。 */
+.dscc-sep { height: 0.5px; margin: 3px 2px; background: var(--dsw-alias-border-l2); border: 0; }
+
+/* ───────────── 按钮：官方 Button.module.css ─────────────
+   md = 36px 高 / radius-md / padding 0 14px / 14px-22px；
+   sm = 28px 高 / radius-sm / padding 0 10px / 12px-18px。
+   primary 底色 button-primary-fill、文字 label-primary-foreground、
+   悬停 button-primary-hover —— 全部是官方原值。 */
+.dscc-btn {
+  box-sizing: border-box;
+  display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+  height: 36px; padding: 0 14px;
+  border: none; border-radius: var(--dsw-radius-md);
+  cursor: pointer;
+  font: inherit; font-size: 14px; line-height: 22px;
   color: var(--dsw-alias-label-primary);
-  border: 1px solid var(--dsw-alias-border-l1);
-  border-radius: 12px; padding: 18px 20px 16px;
-  box-shadow: 0 18px 48px rgb(0 0 0 / 32%);
-  font: inherit;
+  background: transparent;
+  /* 【实测修复 1】中文可在任意字符处断行，按钮被 flex 压到 min-content
+     （= 一个字宽）时文字会竖排。官方没写这条是因为它不放中文，我们必须留。 */
+  white-space: nowrap;
 }
-.dscc-card h2 { margin: 0 0 10px; font-size: 15px; line-height: 22px; color: var(--dsw-alias-label-primary); }
-.dscc-card p { margin: 0 0 10px; font-size: 13px; line-height: 20px; color: var(--dsw-alias-label-secondary); }
-.dscc-card .dscc-subject {
-  color: var(--dsw-alias-label-primary); font-weight: 600;
-  word-break: break-word;
+.dscc-btn:disabled { cursor: not-allowed; opacity: 0.4; }
+/* 【实测修复 2】换底只作用于中性按钮。旧版裸 :hover 换底（优先级 0,2,0）
+   压过实心变体的背景（0,1,0），文字色却仍是变体的前景色 ⇒ 对比度≈0，
+   鼠标一移上去文字就"消失"。实心变体改用官方 primary 的做法：换底色。 */
+.dscc-btn:not(.dscc-btn-primary):not(.dscc-btn-danger):not(:disabled):hover {
+  background: var(--dsw-alias-interactive-bg-hover);
 }
-.dscc-card .dscc-id {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 11px; color: var(--dsw-alias-label-secondary);
-  word-break: break-all;
+.dscc-btn:not(.dscc-btn-primary):not(.dscc-btn-danger):not(:disabled):active {
+  background: var(--dsw-alias-interactive-bg-active);
 }
-.dscc-warn {
-  display: flex; gap: 8px; align-items: flex-start;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 8px; padding: 10px 12px; margin: 0 0 14px;
-  font-size: 12px; line-height: 18px;
-  color: var(--dsw-alias-label-primary);
+.dscc-btn:focus-visible {
+  outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline-offset: 1px;
 }
-.dscc-warn-dot {
-  flex: none; width: 8px; height: 8px; margin-top: 5px; border-radius: 50%;
+.dscc-btn-primary {
+  background: var(--dsw-alias-button-primary-fill);
+  color: var(--dsw-alias-label-primary-foreground);
+}
+.dscc-btn-primary:hover:not(:disabled) { background: var(--dsw-alias-button-primary-hover); }
+/* 破坏性主操作：官方 Button 没有 danger 实心档，沿用本插件既有的 error 实心底，
+   前景色与 primary 同一令牌（官方"状态色配同一前景"的做法）。
+   悬停仍走亮度微调 —— 这里没有官方 hover 令牌可抄，换底会重现修复 2 那个 bug。 */
+.dscc-btn-danger {
   background: var(--dsw-alias-state-error-primary);
+  color: var(--dsw-alias-label-primary-foreground);
 }
-.dscc-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
-.dscc-kv { margin: 2px 0 0; padding: 0; list-style: none; font-size: 12px; line-height: 19px; color: var(--dsw-alias-label-secondary); }
-.dscc-error-code {
-  display: inline-block; margin-bottom: 6px; padding: 1px 6px; border-radius: 4px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px;
-  color: var(--dsw-alias-label-secondary);
+.dscc-btn-danger:hover:not(:disabled) { filter: brightness(1.12); }
+/* 官方 sm 刻度：行内操作（每行的「删除」）用它，避免 36px 按钮挤满列表。 */
+.dscc-btn-small { height: 28px; font-size: 12px; line-height: 18px; padding: 0 10px; border-radius: var(--dsw-radius-sm); }
+
+
+/* ───────────── 徽标：官方 Tag.module.css ─────────────
+   999px 全圆角 / 1px 8px / 11px-17px / 字重 500 / nowrap。
+   状态 tone 的官方做法：用**同一个状态令牌**做 10% 自着色底 + 同色文字
+   （warning 是 12%，官方注释说明那是照插件清单页既有值统一来的），
+   一次换色底与字一起动，不需要第二个令牌。 */
+.dscc-badge {
+  display: inline-flex; align-items: center;
+  border-radius: 999px; corner-shape: round;
+  padding: 1px 8px;
+  font-size: 11px; line-height: 17px; font-weight: 500;
+  white-space: nowrap;
+  color: var(--dsw-alias-label-tertiary);
+}
+/* outline = 官方默认档：0.5px 细边 + 三级文字色。 */
+.dscc-badge-outline { border: 0.5px solid var(--dsw-alias-border-l4); }
+.dscc-badge-ok {
+  background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 10%, transparent);
+  color: var(--dsw-alias-state-success-primary);
+}
+.dscc-badge-running {
+  background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 12%, transparent);
+  color: var(--dsw-alias-state-warn-primary);
+}
+.dscc-badge-archived {
+  background: color-mix(in srgb, var(--dsw-alias-state-idle-primary) 10%, transparent);
+  color: var(--dsw-alias-state-idle-primary);
+}
+.dscc-badge-subagent {
+  background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 12%, transparent);
+  color: var(--dsw-alias-state-warn-primary);
 }
 
-/* ───────────── 批量管理面板（设置页 section） ───────────── */
-.dscc-section { display: block; }
-/* 设置页内容列自己滚动，所以这里用自适应高度而不是 100vh。
-   【实测修复 · 级联】必须写成 .dscc-panel.dscc-panel-section（优先级 0,2,0）。
-   原来只写 .dscc-panel-section（0,1,0），与 .dscc-panel 同优先级且**排在其前**，
-   于是 .dscc-panel 的 height:100% / padding:20px 22px / background 全部胜出 ——
-   这条规则从未生效。已用真浏览器 computed style 取证：
-   padding 实为 20px 22px、背景实为白色，正是 .dscc-panel 的值。
-   （注释内不得写反引号：CSS 在 JS 模板串里，会提前终止。） */
-.dscc-panel.dscc-panel-section { height: auto; padding: 0; background: transparent; }
-.dscc-panel {
-  display: flex; flex-direction: column; gap: 12px;
-  height: 100%; box-sizing: border-box; padding: 20px 22px;
-  background: var(--dsw-alias-bg-base);
-  color: var(--dsw-alias-label-primary); font: inherit;
+/* ───────────── 筛选条：官方「选择器药丸 + 内联 Menu」 ─────────────
+   【这一组是本次统一的关键】上一版留了五个原生 select —— 原生下拉是
+   操作系统绘制的直角控件，与官方主题完全两个世界，这正是"不统一"的来源。
+
+   官方在**同一个设置页**里怎么做一个下拉？看 dsh-client-locale 的语言行
+   （LanguageRow.module.css）：不是 select，而是一个 button 药丸
+   （radius-md / bg-module-platform / 36px 高 / gap 12px / 14px-22px）
+   挂 aria-haspopup=menu，点开 primitives 的 Menu。这里整套照抄。
+   Menu 用官方默认的非 portal 形态（position:absolute 贴在触发器下方），
+   因此不需要往 document.body 挂东西 —— R-22 也守住了。 */
+.dscc-select-root { position: relative; display: inline-flex; min-width: 0; }
+.dscc-selector {
+  box-sizing: border-box;
+  display: inline-flex; align-items: center; gap: 12px;
+  width: 100%; height: 36px; padding: 0 14px;
+  border: none; border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-bg-module-platform);
+  color: var(--dsw-alias-label-primary);
+  font: inherit; font-size: 14px; line-height: 22px; cursor: pointer;
 }
-.dscc-panel-head h1 { margin: 0 0 2px; font-size: 16px; line-height: 24px; }
-.dscc-panel-head p { margin: 0; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
-/* ───────────── 筛选区（等宽网格，照原项目的克制风格） ─────────────
-   【为什么又改】上一版用 flex-wrap 排「标签+下拉」，每个下拉按内容自适应宽度，
-   于是每一行的标签起点、下拉宽度都不一样 —— 截图里看着就是「乱」。
-   flex-wrap 天然产生这种参差，靠调 gap 治不好。
-   改用 **CSS Grid 定列**：标签列 + 控件列各占固定轨道，
-   所有行的标签右对齐、所有下拉等宽，天然整齐。
-   原项目（@haoranwang0921/dsh-session-cleaner）的克制做法也是
-   「少控件 + 固定宽度 + flex 卡片行」，不做花哨响应式。 */
-/* 筛选区：**外层就用网格**，两列 = [1fr 自适应宽的控件列] + [按钮列]。
-   为什么这样写（用户反馈「对齐输入框」）：
-   原来外层是 flex-direction: column，第 1 行（搜索+刷新）与第 2 行（筛选网格）
-   各自独占整宽。于是搜索框右边停在「刷新」按钮左边（实测 752px），
-   而筛选网格铺到卡片右内边（实测 840px）—— **右边界差 87.58px**，看着就是没对齐。
+.dscc-selector:hover { background: var(--dsw-alias-interactive-bg-hover); }
+.dscc-selector:focus-visible {
+  outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline-offset: -2px;
+}
+/* 当前值：可收缩 + 省略号（项目路径可能很长）。 */
+.dscc-selector-label {
+  flex: 1 1 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left;
+}
+.dscc-selector-chevron { display: inline-flex; flex: none; width: 14px; height: 14px; }
 
-   现在把「搜索框」与「筛选网格」放进**同一列**：
-     · .dscc-filters-row { display: contents } → 行容器不生成盒子，
-       搜索框与刷新按钮直接成为外层网格的两个格子（第 1 列 / 第 2 列）；
-     · .dscc-filters-grid { grid-column: 1 } → 筛选网格也占第 1 列。
-   两者同列 ⇒ **左右边界由布局保证一致**，不靠手调 padding 去凑。
-   （这比「给网格加一个等于按钮宽度的右内边距」稳：按钮文字变长变短都不受影响。）
+/* 官方 Menu.module.css 的 .list：radius-lg、4px 内边距、prominent 描边阴影，
+   贴在触发器下方 4px。底色用 menu-surface-fill（官方半透明面）。 */
+.dscc-menu {
+  box-sizing: border-box;
+  position: absolute; top: calc(100% + 4px); left: 0; z-index: 100;
+  display: flex; flex-direction: column; gap: 0;
+  width: max-content; min-width: 144px; max-width: 360px;
+  padding: 4px; border: 0;
+  border-radius: var(--dsw-radius-lg);
+  background: var(--dsw-menu-surface-fill);
+  --dsw-elevation-stroke-color: var(--dsw-alias-border-l1);
+  box-shadow: var(--dsw-elevation-prominent);
+  /* 项目可能很多：官方 .scrollable 用视口高度封顶 + 内部滚动。 */
+  max-height: calc(100vh - 12px - max(12px, var(--dsh-frame-overlay-top, 12px)));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+/* 官方 .item：min-height 34px / padding 6px 8px / radius-md / 13px-20px；
+   悬停与键盘聚焦共用同一底色且去掉默认描边（底色就是聚焦指示）。 */
+.dscc-menu-item {
+  display: flex; align-items: center; gap: 6px;
+  width: 100%; box-sizing: border-box;
+  min-height: 34px; padding: 6px 8px;
+  border: none; border-radius: var(--dsw-radius-md);
+  background: transparent; cursor: pointer;
+  font: inherit; font-size: 13px; line-height: 20px;
+  color: var(--dsw-alias-label-primary); text-align: left;
+}
+.dscc-menu-item:hover:not(:disabled),
+.dscc-menu-item:focus-visible:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); }
+.dscc-menu-item:focus-visible { outline: none; }
+/* 官方 .itemLabel：占满、单行省略。 */
+.dscc-menu-item-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 官方 .check：14px，选中行尾部一枚勾；未选中行留同宽空位保证文字对齐。 */
+.dscc-menu-item-check {
+  display: inline-flex; flex: none; width: 14px; height: 14px;
+  align-items: center; justify-content: center;
+  color: var(--dsw-alias-label-primary);
+}
+.dscc-menu-item-check[data-hidden="true"] { visibility: hidden; }
 
-   ⚠ 注释里不能用反引号：CSS 在 JS 模板字符串里，一个反引号就提前终止模板串。
-   已因此踩坑多次，这条规则在本文件里反复出现，务必遵守。 */
+/* ───────────── 搜索框：官方 Input.module.css ─────────────
+   官方是 wrap（32px 高 / 0.5px l4 描边 / radius-md / bg-layer-1 / 前置图标）
+   包一个无边框透明 input。插件清单页的搜索框同族，只是 36px 高、
+   图标绝对定位在左 12px —— 这里取清单页那版（与本面板同为设置页）。 */
+.dscc-search { position: relative; display: flex; width: 100%; min-width: 0; align-items: center; color: var(--dsw-alias-label-tertiary); }
+.dscc-search-icon { pointer-events: none; position: absolute; left: 12px; display: inline-flex; width: 16px; height: 16px; align-items: center; justify-content: center; }
+.dscc-input {
+  box-sizing: border-box; width: 100%; min-width: 0; height: 36px;
+  padding: 0 34px 0 36px;
+  border: 0.5px solid var(--dsw-alias-border-l4); border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary); font: inherit; font-size: 13px; line-height: 22px;
+  outline: none;
+}
+.dscc-input::placeholder { color: var(--dsw-alias-label-tertiary); }
+/* 官方聚焦做法：描边换成聚焦色 + 一圈 18% 透明度的同色光晕（不是 outline）。 */
+.dscc-input:focus-visible {
+  border-color: var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)) 18%, transparent);
+}
+/* type=search 的原生清除按钮在 Chromium 里是系统绘制的灰色圆叉，
+   与主题无关 —— 官方也没用它，这里关掉，清空走键盘/全选。 */
+.dscc-input::-webkit-search-cancel-button { appearance: none; }
+
+/* ───────────── 卡片：官方「设置页卡片」做法 ─────────────
+   【上一版为什么看着不统一 · 已实测定位】浅色主题下
+   --dsw-alias-bg-base / bg-layer-1 / bg-layer-2 **三个值完全相同**
+   （都是 neutral-bluish-00）。我上一版把卡面从 layer-1 换成 layer-2，
+   在浅色主题里**等于什么都没换** —— 卡片与页面一个颜色，只剩一圈描边，
+   所以看着就是"贴了个框"。官方的卡片根本不靠底色区分，靠的是
+   0.5px 细描边 + 20px 大圆角 + 悬停换底。插件清单页（与本面板同在
+   设置页里）的原文：
+     border .5px settings-card-stroke / radius-xl / bg settings-card-fill
+     hover → interactive-bg-hover
+   这里整套照抄，不再自创。 */
 .dscc-filters {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 10px;
-  padding: 12px 14px; border-radius: 16px;
-  border: 1px solid var(--dsw-alias-border-l1);
-  background: var(--dsw-alias-bg-layer-2);
+  padding: 14px 16px; border-radius: var(--dsw-radius-xl);
+  border: 0.5px solid var(--dsw-alias-settings-card-stroke);
+  background: var(--dsw-alias-settings-card-fill);
 }
 /* 行容器不生成盒子 —— 它只为容纳「搜索框 + 按钮」而存在，本身不该占格子。 */
 .dscc-filters-row { display: contents; }
-/* 搜索框：占满所在列（第 1 列），宽度交给网格轨道决定。 */
-.dscc-input.dscc-filters-search { width: 100%; min-width: 0; }
+/* 搜索框占满所在列（第 1 列），宽度交给网格轨道决定。
+   【类名落在哪一层】官方 Input 是 wrap 包 input 的两层结构，所以真正占格子的是
+   **外层 .dscc-search**，不是里面的 input。上一版把 dscc-filters-search 挂在
+   input 上、规则写成 .dscc-input.dscc-filters-search —— 换成 wrap 结构后
+   那条规则再也匹配不到任何元素（死规则），而它的级联断言只读 CSS 文本、
+   不看 DOM，于是测试照样绿。这里把类与规则对齐到真正占格子的那一层。 */
+.dscc-search.dscc-filters-search { width: 100%; min-width: 0; }
 
-/* 筛选网格：与搜索框**同列**，所以宽度天然一致；
-   控件列用 1fr 均分剩余宽度 —— 长文案（如「全部对话（显示已归档）」）不再被截断。 */
+/* 筛选网格：与搜索框**同列**，所以左右边界由布局保证一致。
+   【为什么是网格不是 flex-wrap】flex-wrap 下每个控件按内容自适应宽度，
+   每行标签起点与控件宽度都不一样，看着就是「乱」；定列天然整齐。 */
 .dscc-filters-grid {
   grid-column: 1;
   display: grid;
   grid-template-columns: 48px minmax(0, 1fr) 48px minmax(0, 1fr);
   align-items: center;
-  gap: 8px 10px;
+  gap: 10px;
 }
-/* 字段：<label> 自身不生成盒子（display:contents），
-   于是它的两个子节点（标签 span + select）**直接成为网格项** ——
-   既保证「标签列 / 控件列」严格对齐，又保留「点标签聚焦控件」的原生语义。 */
+/* 字段：<label> 自身不生成盒子（display:contents），于是它的两个子节点
+   （标签 span + 控件）**直接成为网格项** —— 既保证两列严格对齐，
+   又保留「点标签聚焦控件」的原生语义。 */
 .dscc-field { display: contents; }
+/* 标签分散对齐：字数不一（4 字「会话类型」vs 2 字「项目」）要在同一列宽内
+   两端顶格。只写 text-align: justify 无效 —— 单行文本 justify 不作用于
+   最后一行，必须同时给 text-align-last: justify。 */
 .dscc-field-label {
-  font-size: 12px; line-height: 18px; white-space: nowrap;
-  color: var(--dsw-alias-label-secondary);
   width: 100%;
+  font-size: 12px; line-height: 18px; white-space: nowrap;
+  color: var(--dsw-alias-label-tertiary);
   text-align: justify;
   text-align-last: justify;
 }
-.dscc-input {
-  box-sizing: border-box; width: 100%;
-  padding: 7px 10px; border-radius: 7px;
-  border: 1px solid var(--dsw-alias-border-l1);
-  background: var(--dsw-alias-bg-base);
-  color: var(--dsw-alias-label-primary); font: inherit; font-size: 13px; line-height: 18px;
-}
-.dscc-input:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 1px; }
-/* 下拉固定宽度：由网格轨道决定，不再按内容长短参差。 */
-.dscc-select {
-  box-sizing: border-box; width: 100%;
-  padding: 6px 8px; border-radius: 7px;
-  border: 1px solid var(--dsw-alias-border-l1);
-  background: var(--dsw-alias-bg-base);
-  color: var(--dsw-alias-label-primary); font: inherit; font-size: 13px; line-height: 18px;
-}
-.dscc-select:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 1px; }
 
 .dscc-panel-bulk {
   display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
-  padding: 8px 10px; border-radius: 16px;
-  border: 1px solid var(--dsw-alias-border-l1);
-  background: var(--dsw-alias-bg-layer-2);
+  padding: 10px 14px; border-radius: var(--dsw-radius-xl);
+  border: 0.5px solid var(--dsw-alias-settings-card-stroke);
+  background: var(--dsw-alias-settings-card-fill);
 }
-.dscc-panel-count { font-size: 12px; color: var(--dsw-alias-label-secondary); }
-.dscc-panel-fail { color: var(--dsw-alias-state-error-primary); font-size: 12px; }
-.dscc-panel-result {
-  display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
-  padding: 9px 12px; border-radius: 16px;
-  border: 1px solid var(--dsw-alias-border-l1);
-  background: var(--dsw-alias-bg-layer-2);
-  font-size: 12px;
-}
+.dscc-panel-count { font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-tertiary); }
+.dscc-panel-fail { color: var(--dsw-alias-state-error-primary); font-size: 12px; line-height: 18px; }
+/* 空态/加载态：官方清单页的状态文字是 13px-20px + label-tertiary。 */
 .dscc-panel-state {
-  padding: 28px 16px; border-radius: 16px; text-align: center;
-  border: 1px solid var(--dsw-alias-border-l1);
-  background: var(--dsw-alias-bg-layer-2);
-  color: var(--dsw-alias-label-secondary); font-size: 13px; line-height: 20px;
+  padding: 28px 16px; border-radius: var(--dsw-radius-xl); text-align: center;
+  border: 0.5px solid var(--dsw-alias-settings-card-stroke);
+  background: var(--dsw-alias-settings-card-fill);
+  color: var(--dsw-alias-label-tertiary); font-size: 13px; line-height: 20px;
 }
 .dscc-panel-state p { margin: 0 0 6px; }
 
-/* ───────────── 会话列表：卡片式行（照原项目 sessdel-row 的做法） ─────────────
-   【为什么不用表格】表格要 6 列都对齐，而列宽/换行/省略号互相牵制，
-   稍一变窄就出现「逐字符换行」「标签乱飘」。原项目用的是
-   「flex 卡片行 + 左内容右操作」，各行的内部结构独立，天然不会错位，
-   窄屏也只是内容变少、不会整体崩掉。这里照它的思路重做。 */
-.dscc-listwrap { flex: 1 1 auto; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 6px; padding-right: 2px; }
-.dscc-list-head {
-  display: flex; align-items: center; gap: 10px;
-  padding: 0 12px 2px 12px;
-  font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary);
-}
-
-/* 一行 = 一张卡片（官方卡面：border-l1 + 16px 圆角 + bg-layer-2） */
+/* ───────────── 会话列表行：官方卡片 ─────────────
+   【为什么不用表格】表格要 6 列都对齐，列宽/换行/省略号互相牵制，
+   一变窄就出现「逐字符换行」「标签乱飘」。官方清单页也是
+   「卡片 + 左内容右操作」，各行内部独立，天然不错位。 */
+.dscc-listwrap { flex: 1 1 auto; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 8px; padding-right: 2px; }
 .dscc-row {
-  display: flex; align-items: center; gap: 10px;
-  box-sizing: border-box; padding: 8px 10px;
-  border: 1px solid var(--dsw-alias-border-l1); border-radius: 16px;
-  background: var(--dsw-alias-bg-layer-2);
+  display: flex; align-items: center; gap: 12px;
+  box-sizing: border-box; min-height: 52px; padding: 12px 14px;
+  border: 0.5px solid var(--dsw-alias-settings-card-stroke); border-radius: var(--dsw-radius-xl);
+  background: var(--dsw-alias-settings-card-fill);
 }
-.dscc-row:hover { background: var(--dsw-alias-bg-layer-1); }
+/* 官方卡片的悬停反馈就是这一条换底。 */
+.dscc-row:hover { background: var(--dsw-alias-interactive-bg-hover); }
 .dscc-row-blocked { opacity: 0.62; }
-.dscc-row-check { flex: none; width: 16px; height: 16px; margin: 0; }
+/* 勾选框：官方 Checkbox.module.css 给 input 的那套（16px 见方 + accent-color
+   跟随品牌色 + 官方焦点环）。官方那版外面套一层 label 并带**可见文字标签**，
+   而本插件行旁就是标题、批量条是按钮，再插一个可见标签会重复，
+   所以只取 input 部分；可访问名由 JSX 的 aria-label 给。 */
+.dscc-row-check {
+  flex: none; box-sizing: border-box;
+  width: 16px; height: 16px; margin: 0;
+  accent-color: var(--dsw-alias-brand-primary); cursor: pointer;
+}
+.dscc-row-check:focus-visible {
+  outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline-offset: 2px;
+}
+.dscc-row-check:disabled { cursor: default; }
 
-/* 主内容列：可收缩（min-width:0 是关键，否则里面的省略号不生效） */
-.dscc-row-main { min-width: 0; flex: 1 1 auto; }
+/* 主内容列：【实测修复 3】min-width:0 是关键，否则里面的省略号不生效 */
+.dscc-row-main { min-width: 0; flex: 1 1 auto; display: flex; flex-direction: column; gap: 2px; }
+/* 官方卡片标题：14px / 字重 500 / 20px 行高 / 单行省略。 */
 .dscc-row-title {
-  font-size: 13px; line-height: 18px; color: var(--dsw-alias-label-primary);
+  font-size: 14px; line-height: 20px; font-weight: 500;
+  color: var(--dsw-alias-label-primary);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+/* 官方卡片描述：12px-18px + label-tertiary。 */
 .dscc-row-meta {
-  margin-top: 2px; font-size: 11px; line-height: 16px;
-  color: var(--dsw-alias-label-secondary);
+  min-width: 0;
+  font-size: 12px; line-height: 18px;
+  color: var(--dsw-alias-label-tertiary);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+/* 会话 id：官方给「身份串」的做法是一枚 code 底片
+   （font-family-code / 12px-18px / radius-xs / bg-module-platform / label-secondary）。
+   【实测修复 4】这里不得出现 break-all —— 标题是中文时逐字符折断。 */
 .dscc-row-meta code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 11px;
+  box-sizing: border-box; display: inline-block;
+  max-width: 100%; padding: 1px 6px; border-radius: var(--dsw-radius-xs);
+  background: var(--dsw-alias-bg-module-platform);
+  font-family: var(--ds-font-family-code); font-size: 12px; line-height: 18px;
+  color: var(--dsw-alias-label-secondary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom;
 }
 .dscc-row-sep { margin: 0 6px; opacity: 0.6; }
 
-/* 右侧固定宽度区：状态徽标 + 操作按钮，各行位置一致 */
+/* 右侧固定区：状态徽标 + 操作按钮。官方 .cardTrailing：flex:none + gap 8px。 */
 .dscc-row-side { flex: none; display: flex; align-items: center; gap: 8px; }
 .dscc-row-badge { flex: none; width: 62px; text-align: right; }
 .dscc-row-actions { flex: none; }
 
-.dscc-panel-pager { display: flex; gap: 10px; align-items: center; justify-content: flex-end; font-size: 12px; color: var(--dsw-alias-label-secondary); }
+.dscc-panel-pager { display: flex; gap: 10px; align-items: center; justify-content: flex-end; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-tertiary); }
 .dscc-panel-cost { font-variant-numeric: tabular-nums; opacity: 0.85; }
 .dscc-panel-hidden { color: var(--dsw-alias-state-warn-primary); }
 
-.dscc-btn-small { padding: 4px 10px; font-size: 12px; }
+/* ───────────── 弹窗：官方 Modal.module.css ─────────────
+   【为什么不是原生 dialog】官方 Modal 用的是 div + fixed + z-index:1000。
+   原生 <dialog> 的三个问题见 useModalLayer 注释：::backdrop 与遮罩叠加、
+   元素被宿主选择器意外匹配、以及无法实现「busy 时 Esc 不关」。
+   层级：root 是 fixed + inset:0 + z-index:1000，flex 居中，
+   上下内边距取 max(24px, 桌面框 overlay inset)。 */
+.dscc-modal {
+  pointer-events: auto;
+  position: fixed; inset: 0; z-index: 1000;
+  display: flex; align-items: center; justify-content: center;
+  padding: max(24px, var(--dsh-frame-overlay-top, 24px)) 24px;
+}
+/* 官方遮罩：absolute + backdrop-filter 模糊 + 一层 bg-mask-1 底色，
+   入场淡入。上一版我用 color-mix(bg-base 45%) 自己凑 —— 现在有真令牌了。 */
+.dscc-modal-mask {
+  position: absolute; inset: var(--dsh-frame-chrome-top, 0px) 0 0;
+  backdrop-filter: var(--dsw-mask-blur);
+}
+.dscc-modal-mask::after {
+  content: ""; position: absolute; inset: 0;
+  background: var(--dsw-alias-bg-mask-1);
+  animation: dscc-modal-enter .2s cubic-bezier(.4, 0, .2, 1);
+}
+/* 官方卡片：radius-panel(28px) / bg-layer-2 / prominent 描边阴影 /
+   列方向 gap 20px / 底部 24px 内边距 / 宽 min(380px,100%)。
+   本面板内容较长（删除结果有多行），宽度放宽到 460px —— 官方自己的
+   RiskConfirmation 也是同一形态、宽度取 min(440px,100%)，同族做法。 */
+.dscc-card {
+  box-sizing: border-box; position: relative; z-index: 1;
+  display: flex; flex-direction: column; gap: 20px;
+  width: min(460px, 100%); max-height: 100%;
+  padding: 0 0 24px; overflow: hidden;
+  border: 0; border-radius: var(--dsw-radius-panel);
+  background: var(--dsw-alias-bg-layer-2);
+  --dsw-elevation-stroke-color: var(--dsw-alias-border-l1);
+  box-shadow: var(--dsw-elevation-prominent);
+  color: var(--dsw-alias-label-primary); font: inherit;
+  animation: dscc-modal-enter .2s cubic-bezier(.4, 0, .2, 1);
+}
+@keyframes dscc-modal-enter { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .dscc-card, .dscc-modal-mask::after { animation: none; }
+}
+.dscc-card:focus { outline: none; }
+/* 官方 .content / .header / .title / .close / .description / .body / .footer
+   一套：头部 pad 22/14/12/24 且两端对齐（标题左、关闭按钮右），
+   正文与描述共用 24px 侧内边。 */
+.dscc-card-content { display: flex; flex-direction: column; width: 100%; min-height: 0; overflow-y: auto; }
+.dscc-card-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 22px 14px 12px 24px;
+}
+.dscc-card h2 {
+  margin: 0; font-size: 16px; line-height: 24px; font-weight: 500;
+  color: var(--dsw-alias-label-primary);
+}
+/* 官方 .close：28px 见方、radius-sm、透明底、次要文字色、悬停换底。 */
+.dscc-card-close {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border: none; border-radius: var(--dsw-radius-sm);
+  background: transparent; cursor: pointer; color: var(--dsw-alias-label-secondary);
+}
+.dscc-card-close:hover { background: var(--dsw-alias-interactive-bg-hover); }
+.dscc-card-close:focus-visible {
+  outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline-offset: 1px;
+}
+.dscc-card-body { display: flex; flex-direction: column; min-width: 0; margin-top: 20px; padding: 0 24px; }
+.dscc-card p { margin: 0 0 10px; font-size: 14px; line-height: 22px; color: var(--dsw-alias-label-primary); }
+.dscc-card p:last-child { margin-bottom: 0; }
+.dscc-card .dscc-subject { color: var(--dsw-alias-label-primary); font-weight: 500; word-break: break-word; }
+.dscc-card .dscc-id {
+  font-family: var(--ds-font-family-code); font-size: 12px; line-height: 18px;
+  color: var(--dsw-alias-label-secondary); word-break: break-all;
+}
+/* 官方 .footer：两端对齐靠右、gap 8px、24px 侧内边。 */
+.dscc-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 0 24px; }
+/* 官方 RiskConfirmation 的警示块：图标 14px 顶对齐 + 次要文字 14px-22px。 */
+.dscc-warn {
+  display: flex; gap: 10px; align-items: flex-start;
+  margin: 0 0 4px; padding: 10px 12px;
+  border: 0.5px solid var(--dsw-alias-border-l3); border-radius: var(--dsw-radius-md);
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 6%, transparent);
+  font-size: 13px; line-height: 20px;
+  color: var(--dsw-alias-label-secondary);
+}
+.dscc-warn-dot {
+  flex: none; width: 8px; height: 8px; margin-top: 6px; border-radius: 50%;
+  background: var(--dsw-alias-state-error-primary);
+}
+.dscc-kv { margin: 2px 0 0; padding: 0; list-style: none; font-size: 13px; line-height: 20px; color: var(--dsw-alias-label-secondary); }
+.dscc-kv li { margin-bottom: 2px; }
+.dscc-error-code {
+  display: inline-block; margin-bottom: 6px; padding: 1px 6px; border-radius: var(--dsw-radius-xs);
+  background: var(--dsw-alias-bg-module-platform);
+  font-family: var(--ds-font-family-code); font-size: 12px; line-height: 18px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* ───────────── 批量管理面板外壳 ─────────────
+   官方清单页的 section：max-width 760px、列方向、gap 14px。
+   设置页内容列自己滚动，所以这里用自适应高度而不是 100vh。
+   【实测修复 · 级联】必须写成 .dscc-panel.dscc-panel-section（优先级 0,2,0）：
+   原来只写 .dscc-panel-section（0,1,0）与 .dscc-panel 同优先级且排在其前，
+   于是 .dscc-panel 的 height/padding/background 全部胜出，这条从未生效。 */
+.dscc-section { display: block; }
+.dscc-panel.dscc-panel-section { height: auto; padding: 0; background: transparent; }
+.dscc-panel {
+  display: flex; flex-direction: column; gap: 14px;
+  width: 100%; max-width: 760px;
+  height: 100%; box-sizing: border-box; padding: 20px 22px;
+  background: var(--dsw-alias-bg-base);
+  color: var(--dsw-alias-label-primary); font: inherit;
+}
+/* 官方设置页标题：14px-22px 常规字重（section 标题不抢视觉）。 */
+.dscc-panel-head h1 { margin: 0 0 2px; font-size: 16px; line-height: 24px; font-weight: 500; }
+.dscc-panel-head p { margin: 0; font-size: 13px; line-height: 20px; color: var(--dsw-alias-label-tertiary); }
 `;
     function Styles() {
       return h("style", { "data-dscc": "styles" }, CSS);
+    }
+
+    /**
+     * 官方图标（primitives 的 IconXxxOutline 系列）。
+     *
+     * 官方图标全部是 **16 viewBox、stroke=currentColor、fill=none**，
+     * 分 Regular（1px 描边）与 Medium（1.3px）两档。这里按 R-23 正路把
+     * 路径数据抄过来（路径数据是美术，不是内部 API），只留本插件用到的四枚。
+     * 一律 aria-hidden —— 可访问名由渲染处的文字/aria-label 负责（官方同款）。
+     */
+    const ICON_NS = "http://www.w3.org/2000/svg";
+    function makeIcon(paths, sizeDefault) {
+      return function Icon(props) {
+        const size = typeof props?.size === "number" ? props.size : sizeDefault;
+        return h(
+          "svg",
+          {
+            width: size,
+            height: size,
+            className: props?.className,
+            viewBox: "0 0 16 16",
+            fill: "none",
+            xmlns: ICON_NS,
+            "aria-hidden": "true",
+            strokeWidth: props?.medium === true ? "1.3" : "1",
+          },
+          ...paths.map((d, i) => h("path", { key: i, d, stroke: "currentColor" })),
+        );
+      };
+    }
+    // IconChevronDownOutline：官方下拉触发器右侧那枚箭头。
+    const IconChevronDown = makeIcon(
+      ["M4 6L7.29289 9.29289C7.68342 9.68342 8.31658 9.68342 8.70711 9.29289L12 6"],
+      14,
+    );
+    // IconCloseOutline：官方 Modal 右上角的关闭按钮。
+    const IconClose = makeIcon(["M2.5 2.5L13.5 13.5", "M13.5 2.5L2.5 13.5"], 14);
+    // IconCheckOutline：官方 Menu 选中行尾部那枚勾。
+    const IconCheck = makeIcon(
+      ["M2.25 8.5L5.49732 11.7473C5.90519 12.1552 6.57263 12.1344 6.95426 11.7018L13.75 4"],
+      14,
+    );
+    // IconSearchOutline：官方搜索框前置图标。
+    const IconSearch = makeIcon(
+      [
+        "M6.58727 11.8586C9.55061 11.8586 11.9529 9.45637 11.9529 6.49304C11.9529 3.5297 9.55061 1.12744 6.58727 1.12744C3.62394 1.12744 1.22168 3.5297 1.22168 6.49304C1.22168 9.45637 3.62394 11.8586 6.58727 11.8586Z",
+        "M10.2991 10.3933L14.7783 14.8725",
+      ],
+      16,
+    );
+
+    /**
+     * 官方「选择器药丸 + 内联 Menu」下拉。
+     *
+     * 【为什么必须换掉原生 select】原生 select 的下拉面板由**操作系统**绘制 ——
+     * 直角、系统描边、不跟随主题，与官方主题完全两个世界。这正是用户看到
+     * 「不统一」的主要来源。官方在同一个设置页里（dsh-client-locale 的语言行）
+     * 的做法是：button 药丸（挂 aria-haspopup=menu / aria-expanded）
+     * + primitives 的 Menu。这里整套照抄。
+     *
+     * 【R-22 边界】官方 Menu 有两种形态：portal（createPortal 到 document.body）
+     * 与**默认的非 portal**（position:absolute 贴在触发器下方）。语言行用了 portal，
+     * 但 R-22 禁止往 document.body 挂东西，所以这里用官方自己的另一种形态 ——
+     * 非 portal、留在组件树内。这不需要猜宿主层级：菜单在卡片内，
+     * 只需盖过同层内容（官方 .list 的 z-index:100 就是这一档）。
+     *
+     * 【官方键盘语义，逐条对齐 Menu 的行为】
+     *   · 打开时聚焦**选中行**（官方 autoFocus=false 时的做法）；
+     *   · ↑/↓（含 Home/End）在行间游走；Tab 落在当前行并关闭；
+     *   · Esc / Shift+Tab 关闭并把键盘还给触发器；
+     *   · 选中一行的焦点回到触发器，除非拥有者自己移动了它。
+     * 这些是「用户依赖的行为」（R-23 明令保留），不是可选装饰。
+     */
+    function SelectMenu(props) {
+      const options = Array.isArray(props.options) ? props.options : [];
+      const [open, setOpen] = React.useState(false);
+      // 触发器盒子与列表盒子：官方 Builtin 只保证 useState，没有 useRef，
+      // 所以用惰性初始值拿跨渲染稳定的 ref 盒子。
+      const boxes = React.useState(() => ({ root: { current: null }, list: { current: null } }));
+      const refs = boxes[0];
+
+      const activeIndex = options.findIndex((o) => o.value === props.value);
+      const activeLabel =
+        activeIndex >= 0 ? options[activeIndex].label : (props.placeholder ?? "");
+
+      /** 打开时把焦点放到选中行（没有选中行则第一行）—— 官方同款。 */
+      React.useEffect(() => {
+        if (!open) return undefined;
+        const list = refs.list.current;
+        if (list === null || list === undefined) return undefined;
+        if (typeof list.focus === "function") {
+          try {
+            list.focus();
+          } catch {
+            /* 环境不支持 focus 就留在触发器上 */
+          }
+        }
+        return undefined;
+      }, [open, refs]);
+
+      /** 点外面关闭：官方用 useDismissOnOutsidePointer，这里同一思路。 */
+      React.useEffect(() => {
+        if (!open) return undefined;
+        const onPointerDown = (event) => {
+          const root = refs.root.current;
+          const target = event?.target;
+          if (root === null || root === undefined) return;
+          if (typeof root.contains === "function" && typeof target === "object" && target !== null) {
+            if (root.contains(target)) return;
+          }
+          setOpen(false);
+        };
+        // capture 阶段：官方同款，保证先于宿主自己的处理器看到这次点击。
+        if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
+          document.addEventListener("pointerdown", onPointerDown, true);
+          return () => document.removeEventListener("pointerdown", onPointerDown, true);
+        }
+        return undefined;
+      }, [open, refs]);
+
+      const pick = (option) => {
+        setOpen(false);
+        if (option.value !== props.value && typeof props.onChange === "function") {
+          props.onChange(option.value);
+        }
+      };
+
+      /** 游走指针：官方用一个 ref 记住「键盘最后落在哪一行」，
+       *  焦点离开列表再回来时从那里续上，而不是跳回选中行。 */
+      const idxBox = React.useState(() => ({ current: Math.max(0, activeIndex) }));
+      const focusIndexRef = idxBox[0];
+      // 每次打开都从选中行开始（官方 autoFocus=false 的初始焦点）。
+      React.useEffect(() => {
+        if (open) focusIndexRef.current = Math.max(0, activeIndex);
+      }, [open, activeIndex, focusIndexRef]);
+
+      const rowsOf = () => {
+        const list = refs.list.current;
+        if (list === null || list === undefined || typeof list.querySelectorAll !== "function") return [];
+        return [...list.querySelectorAll("[data-dscc-row]")];
+      };
+      const focusRow = (index) => {
+        const row = rowsOf()[index];
+        if (row && typeof row.focus === "function") row.focus();
+      };
+      const focusTrigger = () => {
+        const root = refs.root.current;
+        if (root === null || root === undefined) return;
+        if (typeof root.querySelector !== "function") return;
+        const button = root.querySelector("button:not(:disabled)");
+        if (button && typeof button.focus === "function") button.focus();
+      };
+
+      /** ↑/↓/Home/End 游走 + Tab/Esc —— 官方 Menu 的键盘口径。 */
+      const onKeyDown = (event) => {
+        const key = event.key;
+        if (key === "Escape") {
+          event.preventDefault();
+          setOpen(false);
+          focusTrigger();
+          return;
+        }
+        if (key === "Shift" || key === "Control" || key === "Alt" || key === "Meta") return;
+        if (key === "Tab") {
+          // 官方：Tab settles the focused row（落在当前行并关闭，键盘交还触发器）。
+          const focused = options[focusIndexRef.current];
+          setOpen(false);
+          if (focused !== undefined && focused.value !== props.value && typeof props.onChange === "function") {
+            props.onChange(focused.value);
+          }
+          focusTrigger();
+          return;
+        }
+        let next = focusIndexRef.current;
+        if (key === "ArrowDown") next = Math.min(options.length - 1, next + 1);
+        else if (key === "ArrowUp") next = Math.max(0, next - 1);
+        else if (key === "Home") next = 0;
+        else if (key === "End") next = options.length - 1;
+        else if (key === "Enter" || key === " ") {
+          const chosen = options[focusIndexRef.current];
+          if (chosen !== undefined) {
+            event.preventDefault();
+            pick(chosen);
+          }
+          return;
+        } else return;
+        event.preventDefault();
+        focusIndexRef.current = next;
+        focusRow(next);
+      };
+
+      return h(
+        "div",
+        { className: "dscc-select-root", ref: refs.root },
+        h(
+          "button",
+          {
+            type: "button",
+            className: "dscc-selector",
+            "aria-haspopup": "menu",
+            "aria-expanded": open,
+            "aria-label": props.label,
+            title: props.title,
+            disabled: props.disabled === true,
+            onClick: () => setOpen((v) => !v),
+          },
+          h("span", { className: "dscc-selector-label" }, activeLabel),
+          h(IconChevronDown, { className: "dscc-selector-chevron" }),
+        ),
+        open
+          ? h(
+              "div",
+              {
+                ref: refs.list,
+                className: "dscc-menu",
+                role: "menu",
+                "aria-label": props.label,
+                tabIndex: -1,
+                onKeyDown,
+              },
+              ...options.map((option, index) =>
+                h(
+                  "button",
+                  {
+                    key: String(option.value),
+                    type: "button",
+                    role: "menuitemradio",
+                    "aria-checked": option.value === props.value,
+                    "data-dscc-row": "true",
+                    className: "dscc-menu-item",
+                    title: option.title,
+                    // 官方：只有键盘走到该行才聚焦；指针点击不抢焦点，
+                    // 避免鼠标用户看到一圈多余的聚焦环。
+                    tabIndex: -1,
+                    onFocus: () => {
+                      focusIndexRef.current = index;
+                    },
+                    onClick: () => pick(option),
+                  },
+                  h("span", { className: "dscc-menu-item-label" }, option.label),
+                  option.value === props.value
+                    ? h(IconCheck, { className: "dscc-menu-item-check" })
+                    // 未选中行留同宽空位，保证各行文字左对齐（官方 .check 占位）
+                    : h("span", { className: "dscc-menu-item-check", "data-hidden": "true" }, null),
+                ),
+              ),
+            )
+          : null,
+      );
     }
 
     /**
@@ -1127,45 +1498,90 @@ window.__ModuleLoader__.load({
         setReloadSignal((n) => n + 1);
       };
 
-      let body;
+      /**
+       * 官方 Modal 的卡片骨架（primitives Modal.module.css 的 anatomy）：
+       *   root（fixed + inset:0 + z-index:1000，flex 居中）
+       *     ├ mask（absolute + backdrop-filter + bg-mask-1 底色）
+       *     └ dialog（role=dialog + aria-modal + aria-label，radius-panel，
+       *          bg-layer-2，prominent 描边阴影）
+       *          ├ content ─ header（h2 标题 + 右上关闭按钮）
+       *          │            description
+       *          │            body
+       *          └ footer（动作行，靠右，gap 8px）
+       *
+       * 【语义只声明一次】role/aria-modal/aria-label 挂在 dialog 上；
+       * 内层卡片不再重复声明，否则屏幕阅读器读成两层模态。
+       *
+       * 【遮罩点击故意不关闭】这是不可逆的删除确认，误点一次就丢一次确认机会。
+       * 官方 Modal 的 onClose 会接遮罩点击，这里刻意不接 —— 关闭路径只有
+       * 显式的「取消」按钮、右上角关闭钮，或 Esc（且 busy 时被 allowClose 挡住）。
+       */
+      const card = ({ title, body, footer }) =>
+        h(
+          "div",
+          { className: "dscc-card" },
+          h(
+            "div",
+            { className: "dscc-card-content" },
+            h(
+              "div",
+              { className: "dscc-card-head" },
+              h("h2", null, title),
+              h(
+                "button",
+                {
+                  type: "button",
+                  className: "dscc-card-close",
+                  "aria-label": t("done.close"),
+                  disabled: state.busy === true,
+                  onClick: () => setDialog(null),
+                },
+                h(IconClose, null),
+              ),
+            ),
+            h("div", { className: "dscc-card-body" }, body),
+          ),
+          footer === null || footer === undefined ? null : h("div", { className: "dscc-actions" }, footer),
+        );
+
+      let content;
       if (state.result !== null && state.result.bulk === true) {
         // 批量结果：聚合计数 + 逐条失败原因
         const v = state.result;
-        body = h(
-          "div",
-          { className: "dscc-card" },
-          h(Styles, null),
-          h("h2", null, t("panel.resultTitle")),
-          h(
-            "ul",
-            { className: "dscc-kv" },
-            h("li", { key: "ok" }, t("panel.resultOk", { ok: v.ok })),
-            v.fail > 0 ? h("li", { key: "fail", className: "dscc-panel-fail" }, t("panel.resultFail", { fail: v.fail })) : null,
-            v.partial > 0 ? h("li", { key: "partial" }, t("panel.resultPartial", { count: v.partial })) : null,
-            h("li", { key: "files" }, t("panel.resultFiles", { count: v.files })),
-          ),
-          ...(v.failures ?? []).slice(0, 8).map((failure, index) =>
+        content = card({
+          title: t("panel.resultTitle"),
+          body: [
             h(
-              "p",
-              { key: `f${index}`, className: "dscc-panel-fail" },
-              `${failure.code ?? "internal"}：${failure.message ?? ""}`,
+              "ul",
+              { className: "dscc-kv", key: "kv" },
+              h("li", { key: "ok" }, t("panel.resultOk", { ok: v.ok })),
+              v.fail > 0 ? h("li", { key: "fail", className: "dscc-panel-fail" }, t("panel.resultFail", { fail: v.fail })) : null,
+              v.partial > 0 ? h("li", { key: "partial" }, t("panel.resultPartial", { count: v.partial })) : null,
+              h("li", { key: "files" }, t("panel.resultFiles", { count: v.files })),
             ),
+            ...(v.failures ?? []).slice(0, 8).map((failure, index) =>
+              h(
+                "p",
+                { key: `f${index}`, className: "dscc-panel-fail" },
+                `${failure.code ?? "internal"}：${failure.message ?? ""}`,
+              ),
+            ),
+          ],
+          footer: h(
+            "button",
+            { type: "button", className: "dscc-btn dscc-btn-primary", onClick: () => setDialog(null) },
+            t("panel.resultClose"),
           ),
-          h(
-            "div",
-            { className: "dscc-actions" },
-            h("button", { type: "button", className: "dscc-btn dscc-btn-primary", onClick: () => setDialog(null) }, t("panel.resultClose")),
-          ),
-        );
+        });
       } else if (state.result !== null) {
         const v = state.result;
         const rows = [];
         // 内存条目三态：detached（摘掉了）/ absent（本就不在内存里，正常收尾）/ failed（真降级了）。
         //
-        // 【修正 · 原来只有 `v.detached === true ? … : …` 两态】真实宿主里
-        // `sessions.list()` 就是 live 集合本身，删一个已关闭的会话时它「本来就不在内存里」，
-        // 旧逻辑会把这句正常收尾显示成「内存条目未摘除（降级：只删了磁盘）」——
-        // 用户每次删旧会话都看到一句吓人的降级提示，反而盖住真正该关注的情况。
+        // 【修正 · 原来只有两态】真实宿主里 `sessions.list()` 就是 live 集合本身，
+        // 删一个已关闭的会话时它「本来就不在内存里」，旧逻辑会把这句正常收尾
+        // 显示成「内存条目未摘除（降级：只删了磁盘）」—— 用户每次删旧会话都看到
+        // 一句吓人的降级提示，反而盖住真正该关注的情况。
         if (v.detached === true) {
           rows.push(h("li", { key: "detached" }, t("done.detached")));
         } else if (v.detach === "absent") {
@@ -1203,110 +1619,96 @@ window.__ModuleLoader__.load({
           rows.push(h("li", { key: "audit" }, t("done.auditOff")));
         }
 
-        body = h(
-          "div",
-          { className: "dscc-card" },
-          h(Styles, null),
-          h("h2", null, t("done.title")),
-          h("ul", { className: "dscc-kv" }, rows),
-          v.partial === true ? h("p", { className: "dscc-warn" }, t("done.partial")) : null,
-          h("p", null, t("done.reloadHint")),
-          h(
-            "div",
-            { className: "dscc-actions" },
-            h(
-              "button",
-              { type: "button", className: "dscc-btn dscc-btn-primary", onClick: () => setDialog(null) },
-              t("done.close"),
-            ),
+        content = card({
+          title: t("done.title"),
+          body: [
+            h("ul", { className: "dscc-kv", key: "kv" }, rows),
+            v.partial === true ? h("p", { className: "dscc-warn", key: "warn" }, t("done.partial")) : null,
+            h("p", { key: "hint" }, t("done.reloadHint")),
+          ],
+          footer: h(
+            "button",
+            { type: "button", className: "dscc-btn dscc-btn-primary", onClick: () => setDialog(null) },
+            t("done.close"),
           ),
-        );
+        });
       } else if (state.error !== null) {
         const info = explain(state.error, t);
-        body = h(
-          "div",
-          { className: "dscc-card" },
-          h(Styles, null),
-          h("h2", null, t("error.title")),
-          h("span", { className: "dscc-error-code" }, info.code),
-          h("p", null, h("strong", null, `${t("error.label.what")}：`), info.what),
-          info.why ? h("p", null, h("strong", null, `${t("error.label.why")}：`), info.why) : null,
-          info.hint ? h("p", null, h("strong", null, "hint："), info.hint) : null,
-          h("p", null, h("strong", null, `${t("error.label.next")}：`), info.next),
-          h(
-            "div",
-            { className: "dscc-actions" },
+        content = card({
+          title: t("error.title"),
+          body: [
+            h("span", { className: "dscc-error-code", key: "code" }, info.code),
+            h("p", { key: "what" }, h("strong", null, `${t("error.label.what")}：`), info.what),
+            info.why ? h("p", { key: "why" }, h("strong", null, `${t("error.label.why")}：`), info.why) : null,
+            info.hint ? h("p", { key: "hint" }, h("strong", null, "hint："), info.hint) : null,
+            h("p", { key: "next" }, h("strong", null, `${t("error.label.next")}：`), info.next),
+          ],
+          footer: [
             h(
               "button",
-              { type: "button", className: "dscc-btn", onClick: () => setDialog(null) },
+              { key: "cancel", type: "button", className: "dscc-btn", onClick: () => setDialog(null) },
               t("confirm.cancel"),
             ),
             h(
               "button",
               {
+                key: "retry",
                 type: "button",
                 className: "dscc-btn dscc-btn-primary",
                 onClick: () => setDialog({ ...state, error: null }),
               },
               t("confirm.ok"),
             ),
-          ),
-        );
+          ],
+        });
       } else {
-        // 【H2/M4】这里原来有个 `isBulk && state.total ? t("panel.busy", {done,total}) : …`
-        // 的分支，但 `state.total` / `state.done` **从来不会被写入** ——
-        // 批量删除是**一次请求**（见 postDelete / requestDeleteMany），宿主端整批处理，
-        // 客户端拿不到「已完成几条」的中间进度。所以那个分支永远走不到，
-        // 硬凑一个「处理中 0/N…」反而是**假进度**（数字永远不动）。
-        // 现在统一用「正在删除」，如实反映「一次请求、等待结果」的真实过程。
+        // 【H2/M4】这里原来有个「处理中 0/N…」分支，但 `state.total`/`state.done`
+        // **从来不会被写入** —— 批量删除是**一次请求**（见 postDelete /
+        // requestDeleteMany），宿主端整批处理，客户端拿不到中间进度。
+        // 硬凑一个进度数字反而是**假进度**（数字永远不动）。现在统一「正在删除」。
         const isBulk = Array.isArray(state.bulkIds) && state.bulkIds.length > 1;
-        body = h(
-          "div",
-          { className: "dscc-card" },
-          h(Styles, null),
-          h("h2", null, t("confirm.title")),
-          h(
-            "p",
-            null,
-            h("span", null, `${t("confirm.body", { title: "" })}`),
-            h("span", { className: "dscc-subject" }, state.displayTitle || state.sessionId),
-          ),
-          // 批量删除是**一次请求**，没有「已完成几条」的中间状态；
-          // 因此这里统一显示「正在删除」，不做假进度。
-          isBulk ? null : h(
-            "p",
-            null,
-            h("strong", null, `${t("confirm.idLabel")}：`),
-            h("span", { className: "dscc-id" }, state.sessionId),
-          ),
-          h(
-            "div",
-            { className: "dscc-warn" },
-            h("span", { className: "dscc-warn-dot" }),
-            h("span", null, t("confirm.warning")),
-          ),
-          h(
-            "div",
-            { className: "dscc-actions" },
+        content = card({
+          title: t("confirm.title"),
+          body: [
+            h(
+              "p",
+              { key: "subject" },
+              h("span", null, `${t("confirm.body", { title: "" })}`),
+              h("span", { className: "dscc-subject" }, state.displayTitle || state.sessionId),
+            ),
+            // 批量删除是**一次请求**，没有「已完成几条」的中间状态。
+            isBulk
+              ? null
+              : h(
+                  "p",
+                  { key: "id" },
+                  h("strong", null, `${t("confirm.idLabel")}：`),
+                  h("span", { className: "dscc-id" }, state.sessionId),
+                ),
+            h(
+              "div",
+              { className: "dscc-warn", key: "warn" },
+              h("span", { className: "dscc-warn-dot" }),
+              h("span", null, t("confirm.warning")),
+            ),
+          ],
+          footer: [
             h(
               "button",
-              { type: "button", className: "dscc-btn", disabled: state.busy === true, onClick: () => setDialog(null) },
+              { key: "cancel", type: "button", className: "dscc-btn", disabled: state.busy === true, onClick: () => setDialog(null) },
               t("confirm.cancel"),
             ),
             h(
               "button",
-              { type: "button", className: "dscc-btn dscc-btn-danger", disabled: state.busy === true, onClick: run },
+              { key: "ok", type: "button", className: "dscc-btn dscc-btn-danger", disabled: state.busy === true, onClick: run },
               state.busy === true ? t("action.deleting") : t("confirm.ok"),
             ),
-          ),
-        );
+          ],
+        });
       }
 
-      // 外层用 div（官方 Modal 同样不是原生 dialog）：层级由 .dscc-modal 的
-      // position:fixed + z-index 负责，高于设置面板这类高层级浮层。
-      // 卡片自带 role="dialog" + aria-modal，不再让外层重复声明模态语义
-      // （屏幕阅读器会读成两层模态）。
-      // 内层 .dscc-scrim 继续负责视觉遮罩与指针事件（opt-in）。
+      // 官方 Modal 的 root 结构：遮罩与卡片是兄弟，卡片压在遮罩之上。
+      // 语义（role/aria-modal/aria-label）只挂在这一层。
       const label =
         state.result !== null && state.result.bulk === true
           ? t("panel.resultTitle")
@@ -1326,12 +1728,11 @@ window.__ModuleLoader__.load({
           role,
           "aria-modal": "true",
           "aria-label": label,
-          // 遮罩点击**故意不关闭**：这是不可逆的删除确认，误点一次就丢一次确认机会；
-          // 关闭路径只有两条 —— 显式的「取消」按钮，或 Esc（由 useModalLayer 处理，
-          // 且 busy 时被 allowClose=false 挡住）。
-          // （.dscc-scrim 铺满整个浮层，因此指针事件不会逃到背后页面。）
         },
-        h("div", { className: "dscc-scrim" }, body),
+        h(Styles, null),
+        // 遮罩：aria-hidden（纯装饰），指针事件由 root 承担 —— 点遮罩不关闭（见上）。
+        h("div", { className: "dscc-modal-mask", "aria-hidden": "true" }),
+        content,
       );
     }
 
@@ -1387,7 +1788,7 @@ window.__ModuleLoader__.load({
       if (row.deletable) {
         return h("span", { className: "dscc-badge dscc-badge-ok" }, t("panel.idle"));
       }
-      return h("span", { className: "dscc-badge" }, t("panel.blocked"));
+      return h("span", { className: "dscc-badge dscc-badge-outline" }, t("panel.blocked"));
     }
 
     /** 时间戳的人类可读显示（本地化用 toLocaleString，失败回退原串）。 */
@@ -1534,14 +1935,27 @@ window.__ModuleLoader__.load({
       }, [visibleKey, deletableKey]);
 
       // ── 筛选区（等宽网格）──
-      // 用 CSS Grid 定列（标签列定宽 + 控件列定宽），所有行标签右对齐、下拉等宽 —— 天然整齐。
+      // 用 CSS Grid 定列（标签列定宽 + 控件列定宽），所有行标签右对齐、控件等宽 —— 天然整齐。
       // 标签与控件是**两个网格项**（不能塞进同一个普通 <label>，那样整个 label 只占一格，
       // 网格就退化成一格一个控件，对齐失效）。
-      // 解法：`<label>` 用 `display: contents` —— 它自身不生成盒子，
-      // 其子节点（标签 span + select）**直接成为网格项**，于是既有对齐、又保留
-      // 「点标签聚焦控件」的原生语义，且**不需要重建元素**（重建容易丢 children）。
-      const field = (labelKey, select) =>
-        h("label", { className: "dscc-field" }, h("span", { className: "dscc-field-label" }, t(labelKey)), select);
+      // 解法：<label> 用 display:contents —— 它自身不生成盒子，
+      // 其子节点（标签 span + 控件）**直接成为网格项**，于是既有对齐、又保留
+      // 「点标签聚焦控件」的原生语义（button 是 labelable 元素，点击会转发给它）。
+      const field = (labelKey, control) =>
+        h("label", { className: "dscc-field" }, h("span", { className: "dscc-field-label" }, t(labelKey)), control);
+
+      /** 官方形态的下拉：选择器药丸 + 内联 Menu（替代原生 select）。 */
+      const select = (labelKey, current, options, onPick, hintKey) =>
+        field(
+          labelKey,
+          h(SelectMenu, {
+            label: t(labelKey),
+            title: hintKey ? t(hintKey) : undefined,
+            value: current,
+            options,
+            onChange: (next) => onPick(next),
+          }),
+        );
 
       const toolbar = h(
         "div",
@@ -1550,14 +1964,20 @@ window.__ModuleLoader__.load({
         h(
           "div",
           { className: "dscc-filters-row" },
-          h("input", {
-            className: "dscc-input dscc-filters-search",
-            type: "search",
-            value: queryInput,
-            placeholder: t("panel.search"),
-            "aria-label": t("panel.searchLabel"),
-            onChange: (event) => setQueryInput(event.target.value),
-          }),
+          // 官方搜索框：前置图标绝对定位在左 12px，输入框左内边距让位。
+          h(
+            "div",
+            { className: "dscc-search dscc-filters-search" },
+            h(IconSearch, { className: "dscc-search-icon" }),
+            h("input", {
+              className: "dscc-input",
+              type: "search",
+              value: queryInput,
+              placeholder: t("panel.search"),
+              "aria-label": t("panel.searchLabel"),
+              onChange: (event) => setQueryInput(event.target.value),
+            }),
+          ),
           h(
             "button",
             {
@@ -1573,80 +1993,61 @@ window.__ModuleLoader__.load({
         h(
           "div",
           { className: "dscc-filters-grid" },
-          field(
+          select(
             "panel.project",
-            h(
-              "select",
-              {
-                className: "dscc-select",
-                value: params.project,
-                onChange: (event) => setParams((prev) => ({ ...prev, project: event.target.value, page: 1 })),
-              },
-              h("option", { value: "" }, t("panel.projectAll")),
-              ...(Array.isArray(value?.projects) ? value.projects : []).map((project) =>
-                h("option", { key: project, value: project }, project),
-              ),
-            ),
+            params.project,
+            [
+              { value: "", label: t("panel.projectAll") },
+              ...(Array.isArray(value?.projects) ? value.projects : []).map((project) => ({
+                value: project,
+                label: project,
+              })),
+            ],
+            (next) => setParams((prev) => ({ ...prev, project: next, page: 1 })),
           ),
-          field(
+          select(
             "panel.state",
-            h(
-              "select",
-              {
-                className: "dscc-select",
-                value: params.running,
-                onChange: (event) => setParams((prev) => ({ ...prev, running: event.target.value, page: 1 })),
-              },
-              h("option", { value: "" }, t("panel.stateAll")),
-              h("option", { value: "idle" }, t("panel.stateIdle")),
-              h("option", { value: "running" }, t("panel.stateRunning")),
-            ),
+            params.running,
+            [
+              { value: "", label: t("panel.stateAll") },
+              { value: "idle", label: t("panel.stateIdle") },
+              { value: "running", label: t("panel.stateRunning") },
+            ],
+            (next) => setParams((prev) => ({ ...prev, running: next, page: 1 })),
           ),
           // 会话类型：官方侧栏默认隐藏子代理行；这里给显式三选一，
           // 让用户既能看主会话（默认，与侧栏一致），也能专门清理子代理会话。
-          field(
+          select(
             "panel.kind",
-            h(
-              "select",
-              {
-                className: "dscc-select",
-                value: params.kind,
-                title: t("panel.kindHint"),
-                onChange: (event) => setParams((prev) => ({ ...prev, kind: event.target.value, page: 1 })),
-              },
-              h("option", { value: "main" }, t("panel.kindMain")),
-              h("option", { value: "subagent" }, t("panel.kindSubagent")),
-              h("option", { value: "all" }, t("panel.kindAll")),
-            ),
+            params.kind,
+            [
+              { value: "main", label: t("panel.kindMain") },
+              { value: "subagent", label: t("panel.kindSubagent") },
+              { value: "all", label: t("panel.kindAll") },
+            ],
+            (next) => setParams((prev) => ({ ...prev, kind: next, page: 1 })),
+            "panel.kindHint",
           ),
           // 归档三选一，文案照官方侧栏视图选项。
-          field(
+          select(
             "panel.archived",
-            h(
-              "select",
-              {
-                className: "dscc-select",
-                value: params.archived,
-                title: t("panel.archivedHint"),
-                onChange: (event) => setParams((prev) => ({ ...prev, archived: event.target.value, page: 1 })),
-              },
-              h("option", { value: "default" }, t("panel.archivedHide")),
-              h("option", { value: "show" }, t("panel.archivedShow")),
-              h("option", { value: "only" }, t("panel.archivedOnly")),
-            ),
+            params.archived,
+            [
+              { value: "default", label: t("panel.archivedHide") },
+              { value: "show", label: t("panel.archivedShow") },
+              { value: "only", label: t("panel.archivedOnly") },
+            ],
+            (next) => setParams((prev) => ({ ...prev, archived: next, page: 1 })),
+            "panel.archivedHint",
           ),
-          field(
+          select(
             "panel.sort",
-            h(
-              "select",
-              {
-                className: "dscc-select",
-                value: params.sort,
-                onChange: (event) => setParams((prev) => ({ ...prev, sort: event.target.value, page: 1 })),
-              },
-              h("option", { value: "activity" }, t("panel.sortActivity")),
-              h("option", { value: "created" }, t("panel.sortCreated")),
-            ),
+            params.sort,
+            [
+              { value: "activity", label: t("panel.sortActivity") },
+              { value: "created", label: t("panel.sortCreated") },
+            ],
+            (next) => setParams((prev) => ({ ...prev, sort: next, page: 1 })),
           ),
         ),
       );

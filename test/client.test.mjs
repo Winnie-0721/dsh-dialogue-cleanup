@@ -242,48 +242,120 @@ test("R-23 / R-22 合规：client.js 不 require Harness Client 包，也不写�
   );
 });
 
-test("R-24 合规：client.js 只用 Theme.listTokens 全表内的令牌", async () => {
+/**
+ * R-24 合规：样式只用主题令牌，字面色仅限纯美术。
+ *
+ * 【这张允许表从哪来 · 已实测更正】
+ * 旧版本把允许表写成「现场 Theme.listTokens 的 14 条」，并据此判定
+ * --dsw-radius-* / --dsw-alias-interactive-bg-* / --dsw-alias-button-*
+ * 等名字「不存在」，于是把它们换算成字面圆角与近似底色。
+ * **那个前提是错的**：inspect 的 14 条只是子集，真正的令牌表由
+ * @deepseek-ai/dsh-client-ui-theme 在运行时整表注入。
+ * 这次直接读那个包的 lib/client.js，逐个字符串核对，得到下表。
+ * 换算成字面值才是上一版界面「看着还是不像官方」的根因之一。
+ *
+ * 核对方式（可复现）：
+ *   npx @electron/asar extract app.asar %TEMP%\dshextract
+ *   在 dsh\node_modules\@deepseek-ai\dsh-client-ui-theme\lib\client.js 里
+ *   搜每个令牌名；颜色类出现 2 次（明暗两套主题各一次），几何类 1 次（全局单值）。
+ */
+test("R-24 合规：client.js 只用主题令牌，且令牌确实存在于主题包", async () => {
   const source = await readFile(CLIENT_PATH, "utf8");
 
-  // 现场 Theme.listTokens 的完整全表（14 个）。新令牌出现时更新这里。
+  // 实测存在于 dsh-client-ui-theme 的令牌（40 条中用到的 38 条 + 少量备用）。
   const ALLOWED = new Set([
+    // 底色与面
     "--dsw-alias-bg-base",
     "--dsw-alias-bg-layer-1",
     "--dsw-alias-bg-layer-2",
+    "--dsw-alias-bg-layer-3",
     "--dsw-alias-bg-overlay",
+    "--dsw-alias-bg-mask-1",
+    "--dsw-alias-bg-module-platform",
+    "--dsw-alias-settings-card-fill",
+    "--dsw-alias-settings-card-stroke",
+    "--dsw-menu-surface-fill",
+    "--dsw-mask-blur",
+    // 描边
     "--dsw-alias-border-l1",
     "--dsw-alias-border-l2",
-    "--dsw-alias-brand-primary",
+    "--dsw-alias-border-l3",
+    "--dsw-alias-border-l4",
+    // 文字与品牌
     "--dsw-alias-label-primary",
+    "--dsw-alias-label-primary-foreground",
     "--dsw-alias-label-secondary",
+    "--dsw-alias-label-tertiary",
+    "--dsw-alias-menu-icon",
+    "--dsw-alias-brand-primary",
+    // 状态
     "--dsw-alias-state-error-primary",
     "--dsw-alias-state-idle-primary",
     "--dsw-alias-state-success-primary",
     "--dsw-alias-state-warn-primary",
+    "--dsw-alias-state-business-primary",
+    // 交互底色与按钮
+    "--dsw-alias-interactive-bg-hover",
+    "--dsw-alias-interactive-bg-active",
+    "--dsw-alias-button-primary-fill",
+    "--dsw-alias-button-primary-hover",
+    // 几何尺度（全局单值：xs4 / sm8 / md12 / lg16 / xl20 / panel28）
+    "--dsw-radius-xs",
+    "--dsw-radius-sm",
+    "--dsw-radius-md",
+    "--dsw-radius-lg",
+    "--dsw-radius-xl",
+    "--dsw-radius-panel",
+    // 层级与焦点
+    "--dsw-elevation-soft",
+    "--dsw-elevation-prominent",
+    "--dsw-elevation-stroke",
+    "--dsw-elevation-stroke-color",
+    "--dsw-focus-ring-width",
+    "--dsw-focus-ring-color",
+    // 字体
+    "--ds-font-family-code",
+    // 桌面框几何：由 dsh-client-ui-layout 注入，官方 CSS 也一律带 fallback
+    "--dsh-frame-overlay-top",
+    "--dsh-frame-chrome-top",
     "--dsw-specific-sidebar-fill",
   ]);
 
-  // 只扫**真正消费令牌**的地方：var(--dsw-…)。
-  // 注释里会出现 `--dsw-alias-*` 这类说明文字（模板字符串内的 // 注释也躲不过去注释剥离），
-  // 按 var() 精确匹配就不会误判。
+  // 只扫**真正消费令牌**的地方：var(--…)。注释里的说明文字不算。
   const used = new Set();
-  for (const match of source.matchAll(/var\(\s*(--dsw-[a-z0-9-]+)\s*\)/g)) {
+  for (const match of source.matchAll(/var\(\s*(--[a-z0-9-]+)\s*[,)]/g)) {
     used.add(match[1]);
   }
 
-  assert.ok(used.size > 0, "应当确实用到了主题令牌");
+  assert.ok(used.size >= 20, `应当大量使用主题令牌，实际 ${used.size} 个`);
   for (const token of used) {
-    assert.ok(ALLOWED.has(token), `使用了不在 Theme.listTokens 全表内的令牌：${token}`);
+    assert.ok(ALLOWED.has(token), `使用了主题包里查无此名的令牌：${token}`);
   }
 
-  // 附录 C.12 的 C 项：这三个令牌在实测全表里**不存在**，必须一个都没用
-  for (const bogus of ["--dsw-alias-danger", "--dsw-alias-interactive-bg-hover", "--dsw-alias-hairline"]) {
+  // 附录 C.12 的 C 项：这两个名字在实测里**确实不存在**（早期设计稿凭空写的），
+  // 必须一个都没用。注意 --dsw-alias-interactive-bg-hover-danger 与之不同，
+  // 它真实存在（官方 Menu 的 .danger 档就在用），所以不在此列。
+  for (const bogus of ["--dsw-alias-danger", "--dsw-alias-hairline"]) {
     assert.equal(used.has(bogus), false, `不得使用不存在的令牌：${bogus}`);
   }
+  // 官方自己有两个悬空引用（在 CSS 里用了但主题包没定义）—— 我们不得跟。
+  for (const dangling of ["--dsw-transition-duration", "--dsw-ease-in-out"]) {
+    assert.equal(used.has(dangling), false, `官方悬空引用，不得使用：${dangling}`);
+  }
 
-  // 硬编码颜色只允许出现在纯美术（这里是用于遮罩的 color-mix，引用了令牌）
+  // 桌面框几何令牌必须带 fallback：非桌面宿主上它们不存在。
+  for (const frame of ["--dsh-frame-overlay-top", "--dsh-frame-chrome-top"]) {
+    for (const m of source.matchAll(new RegExp(`var\\(\\s*${frame}\\s*(,\\s*[^)]*)?\\)`, "g"))) {
+      assert.ok(m[1], `令牌 ${frame} 必须带 fallback（只在桌面壳里被注入）：${m[0]}`);
+    }
+  }
+
+  // 硬编码颜色：一律禁止（本文件已无任何纯色，连阴影也走 elevation 令牌）。
   const literalHex = source.match(/#[0-9a-fA-F]{3,8}\b/g) ?? [];
   assert.deepEqual(literalHex, [], `不得出现硬编码颜色：${literalHex.join(", ")}`);
+  const cssBlock = /const CSS = `([\s\S]*?)`;/.exec(source)?.[1] ?? "";
+  const rgbInCss = cssBlock.replace(/\/\*[\s\S]*?\*\//g, "").match(/rgba?\([^)]*\)/g) ?? [];
+  assert.deepEqual(rgbInCss, [], `CSS 内不得出现 rgb(a) 字面色：${rgbInCss.join(", ")}`);
 });
 
 /**
@@ -430,12 +502,30 @@ test("语言跟随宿主：apply 的清理函数会退订 locale", () => {
  * 否则下一次"顺手改一版"就会无声地退回自绘样式。
  *
  * 官方出处（asar 内 @deepseek-ai/dsh-client-ui-primitives/lib）：
- *   Button.module.css  → md 高 36px / 圆角 12px / 内边距 0 14px / 14px 字 22px 行高；
- *                        sm 高 28px / 圆角 8px / 内边距 0 10px / 12px 字 18px 行高。
+ *   Button.module.css  → md 高 36px / radius-md(12px) / 内边距 0 14px / 14px 字 22px 行高；
+ *                        sm 高 28px / radius-sm(8px) / 内边距 0 10px / 12px 字 18px 行高。
  *   Tag.module.css     → 999px 圆角 / 1px 8px / 11px 字 17px 行高 / 500 字重 / nowrap；
  *                        状态 tone = color-mix 10%（warning 用 12%）自着色底 + 同色文字。
  *   Modal.module.css   → position:fixed + inset:0 + z-index:1000，flex 居中，padding 24px。
+ *   设置页卡片（dsh-client-ui-settings-plugin-inventory 的 LanguageRow/卡片族）
+ *                       → 0.5px settings-card-stroke / radius-xl(20px) / settings-card-fill。
+ *
+ * 【为什么断言的是"用了哪个令牌"而不是"多少像素"】
+ * 上一版这里断言 `border-radius: 12px` 字面值 —— 那本身就是错的产物：
+ * 官方写的是 `var(--dsw-radius-md)`，值由主题给（实测 md=12px）。
+ * 抄字面值等于把官方尺度硬编码进插件，主题一改就分叉。
+ * 所以这里断言**必须引用官方令牌**，并在 TOKEN_SCALES 里钉住
+ * 「该令牌实测等于多少像素」，这样令牌被换成别的档位时也会红。
  */
+const TOKEN_SCALES = {
+  "--dsw-radius-xs": "4px",
+  "--dsw-radius-sm": "8px",
+  "--dsw-radius-md": "12px",
+  "--dsw-radius-lg": "16px",
+  "--dsw-radius-xl": "20px",
+  "--dsw-radius-panel": "28px",
+};
+
 test("官方形态：按钮 / 徽标 / 弹窗的几何与层级必须对齐官方 primitives", async () => {
   const source = await readFile(CLIENT_PATH, "utf8");
   const cssMatch = source.match(/const CSS = `([\s\S]*?)`;/);
@@ -443,15 +533,24 @@ test("官方形态：按钮 / 徽标 / 弹窗的几何与层级必须对齐官�
   const sheet = cssMatch[1];
 
   const rule = (selector) => {
-    const m = new RegExp(`\\${selector}\\s*\\{([^}]*)\\}`).exec(sheet);
+    // 选择器里带正则元字符（:not(:disabled) 的括号），必须先转义再拼进正则。
+    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const m = new RegExp(`${escaped}\\s*\\{([^}]*)\\}`).exec(sheet);
     assert.ok(m, `缺少规则：${selector}`);
     return m[1];
+  };
+  /** 断言某条规则用了指定令牌（而不是把官方像素值硬编码进插件）。 */
+  const usesToken = (block, token, what) => {
+    assert.ok(
+      block.includes(`var(${token}`),
+      `${what} 必须用官方令牌 ${token}（=${TOKEN_SCALES[token]}），不得写字面像素值`,
+    );
   };
 
   // ── Button（官方 md 刻度） ──
   const btn = rule(".dscc-btn");
   assert.match(btn, /height:\s*36px/, "按钮高度必须 36px（官方 md）");
-  assert.match(btn, /border-radius:\s*12px/, "按钮圆角必须 12px（官方 md）");
+  usesToken(btn, "--dsw-radius-md", "按钮圆角");
   assert.match(btn, /padding:\s*0 14px/, "按钮水平内边距必须 0 14px（官方 md）");
   assert.match(btn, /font-size:\s*14px/, "按钮字号必须 14px（官方 md）");
   assert.match(btn, /line-height:\s*22px/, "按钮行高必须 22px（官方 md）");
@@ -461,8 +560,31 @@ test("官方形态：按钮 / 徽标 / 弹窗的几何与层级必须对齐官�
   // ── Button（官方 sm 刻度） ──
   const sm = rule(".dscc-btn-small");
   assert.match(sm, /height:\s*28px/, "小按钮高度必须 28px（官方 sm）");
-  assert.match(sm, /border-radius:\s*8px/, "小按钮圆角必须 8px（官方 sm）");
+  usesToken(sm, "--dsw-radius-sm", "小按钮圆角");
   assert.match(sm, /padding:\s*0 10px/, "小按钮水平内边距必须 0 10px（官方 sm）");
+
+  // 官方 primary 档的三个令牌：底色、前景、悬停底色各一个，不得近似替代。
+  const primary = rule(".dscc-btn-primary");
+  assert.match(primary, /var\(--dsw-alias-button-primary-fill\)/, "primary 底色必须用官方 button-primary-fill");
+  assert.match(primary, /var\(--dsw-alias-label-primary-foreground\)/, "primary 文字必须用官方前景令牌（不得写 bg-base）");
+  assert.match(
+    rule(".dscc-btn-primary:hover:not(:disabled)"),
+    /var\(--dsw-alias-button-primary-hover\)/,
+    "primary 悬停必须用官方 button-primary-hover（换底，不是 filter）",
+  );
+  // 中性按钮的悬停/按下底色：官方是 interactive-bg-hover / -active 两个令牌。
+  // 【变异测试补的断言】T5「退回 bg-layer-2 近似」曾经存活 —— 上一版就是因为
+  // 把这两个官方令牌当成"不存在"而用 bg-layer-2 凑，观感差一档却没人拦得住。
+  assert.match(
+    rule(".dscc-btn:not(.dscc-btn-primary):not(.dscc-btn-danger):not(:disabled):hover"),
+    /background:\s*var\(--dsw-alias-interactive-bg-hover\)/,
+    "中性按钮悬停必须用官方 interactive-bg-hover（不得用 bg-layer-2 近似）",
+  );
+  assert.match(
+    rule(".dscc-btn:not(.dscc-btn-primary):not(.dscc-btn-danger):not(:disabled):active"),
+    /background:\s*var\(--dsw-alias-interactive-bg-active\)/,
+    "中性按钮按下必须用官方 interactive-bg-active",
+  );
 
   // ── Tag（官方胶囊） ──
   const tag = rule(".dscc-badge");
@@ -473,6 +595,14 @@ test("官方形态：按钮 / 徽标 / 弹窗的几何与层级必须对齐官�
   assert.match(tag, /font-weight:\s*500/, "徽标字重必须 500（官方 Tag）");
   assert.match(tag, /white-space:\s*nowrap/, "徽标不得折行（官方 Tag）");
   assert.match(tag, /display:\s*inline-flex/, "徽标必须 inline-flex（官方 Tag）");
+
+  // 官方 Tag 的 outline 档（默认档）：0.5px 细边 + border-l4。
+  // 官方在四个 l* 描边档位里给 Tag 挑的是最浅的 l4，写回 1px/l2 会明显变重。
+  assert.match(
+    rule(".dscc-badge-outline"),
+    /border:\s*0\.5px solid var\(--dsw-alias-border-l4\)/,
+    "徽标 outline 档必须 0.5px border-l4（官方 Tag 默认档）",
+  );
 
   // 状态 tone：官方做法是 color-mix 自着色底 + 同色文字（一次换色，底与字一起动）。
   // 这里把四种状态都钉住，防止退回"只有文字色"的旧形态。
@@ -499,12 +629,78 @@ test("官方形态：按钮 / 徽标 / 弹窗的几何与层级必须对齐官�
   assert.match(modal, /align-items:\s*center/, "弹窗必须垂直居中（官方 Modal）");
   assert.match(modal, /justify-content:\s*center/, "弹窗必须水平居中（官方 Modal）");
 
-  // ── 卡面（官方面板级圆角 + 次级浮层底） ──
+  // ── 卡面（官方设置页卡片：细描边 + radius-xl + 卡片底） ──
+  // 【实测定位】浅色主题下 bg-base / bg-layer-1 / bg-layer-2 **三个值完全相同**，
+  // 所以上一版把卡面从 layer-1 换成 layer-2 等于什么都没换 —— 卡片与页面同色、
+  // 只剩一圈描边，看着就是"贴了个框"。官方根本不靠底色区分卡片。
   const row = rule(".dscc-row");
-  assert.match(row, /border-radius:\s*16px/, "卡片行圆角必须 16px（官方面板级圆角）");
-  assert.match(row, /background:\s*var\(--dsw-alias-bg-layer-2\)/, "卡片行底色必须是 bg-layer-2（官方卡面）");
+  usesToken(row, "--dsw-radius-xl", "卡片行圆角");
+  assert.match(row, /border:\s*0\.5px solid var\(--dsw-alias-settings-card-stroke\)/, "卡片行必须 0.5px settings-card-stroke 细描边（官方）");
+  assert.match(row, /background:\s*var\(--dsw-alias-settings-card-fill\)/, "卡片行底色必须 settings-card-fill（官方）");
+  // 官方卡片的悬停反馈是换底，不是位移/阴影。
+  assert.match(
+    rule(".dscc-row:hover"),
+    /var\(--dsw-alias-interactive-bg-hover\)/,
+    "卡片行悬停必须换官方 interactive-bg-hover 底色",
+  );
   // 【实测修复不得丢】主内容列 min-width:0，否则标题省略号不生效。
   assert.match(rule(".dscc-row-main"), /min-width:\s*0/, "主内容列必须 min-width:0（省略号生效的前提）");
+
+  // ── 筛选下拉：官方「选择器药丸」（不是原生 select） ──
+  // 原生 select 的下拉面板由操作系统绘制，与官方主题完全两个世界。
+  const selector = rule(".dscc-selector");
+  assert.match(selector, /height:\s*36px/, "选择器药丸必须 36px 高（官方语言行同款）");
+  usesToken(selector, "--dsw-radius-md", "选择器药丸圆角");
+  assert.match(selector, /gap:\s*12px/, "选择器药丸 gap 必须 12px（官方语言行同款）");
+  assert.match(selector, /background:\s*var\(--dsw-alias-bg-module-platform\)/, "选择器药丸底色必须 bg-module-platform（官方）");
+  assert.match(selector, /padding:\s*0 14px/, "选择器药丸内边距必须 0 14px（官方）");
+  // 官方 Menu 的 .list：radius-lg + 4px 内边距 + prominent 阴影 + 贴下方 4px。
+  const menu = rule(".dscc-menu");
+  usesToken(menu, "--dsw-radius-lg", "下拉列表圆角");
+  assert.match(menu, /padding:\s*4px/, "下拉列表内边距必须 4px（官方 Menu）");
+  assert.match(menu, /top:\s*calc\(100% \+ 4px\)/, "下拉必须贴在触发器下方 4px（官方 Menu）");
+  assert.match(menu, /box-shadow:\s*var\(--dsw-elevation-prominent\)/, "下拉必须用官方 prominent 层级阴影");
+  assert.match(menu, /background:\s*var\(--dsw-menu-surface-fill\)/, "下拉底色必须 menu-surface-fill（官方）");
+
+  // ── 搜索框：官方 Input / 清单页搜索框 ──
+  const input = rule(".dscc-input");
+  assert.match(input, /height:\s*36px/, "搜索框必须 36px 高（官方清单页同款）");
+  assert.match(input, /border:\s*0\.5px solid var\(--dsw-alias-border-l4\)/, "搜索框必须 0.5px l4 描边（官方）");
+  usesToken(input, "--dsw-radius-md", "搜索框圆角");
+  assert.match(input, /background:\s*var\(--dsw-alias-bg-layer-1\)/, "搜索框底色必须 bg-layer-1（官方）");
+  // 官方聚焦：描边换聚焦色 + 18% 同色光晕（不是 outline）。
+  assert.match(rule(".dscc-input:focus-visible"), /box-shadow:\s*0 0 0 2px color-mix/, "搜索框聚焦必须用官方光晕做法");
+
+  // ── 弹窗卡片：官方 Modal 的 dialog ──
+  const dialog = rule(".dscc-card");
+  usesToken(dialog, "--dsw-radius-panel", "弹窗卡片圆角");
+  assert.match(dialog, /box-shadow:\s*var\(--dsw-elevation-prominent\)/, "弹窗卡片必须官方 prominent 层级阴影");
+  assert.match(dialog, /background:\s*var\(--dsw-alias-bg-layer-2\)/, "弹窗卡片底色必须 bg-layer-2（官方）");
+  assert.match(dialog, /gap:\s*20px/, "弹窗卡片纵向间距必须 20px（官方）");
+  // 官方遮罩走 backdrop-filter + bg-mask-1，不是自己 color-mix 凑一个。
+  assert.match(rule(".dscc-modal-mask"), /backdrop-filter:\s*var\(--dsw-mask-blur\)/, "遮罩必须用官方 mask-blur");
+  assert.match(rule(".dscc-modal-mask::after"), /background:\s*var\(--dsw-alias-bg-mask-1\)/, "遮罩底色必须 bg-mask-1（官方）");
+
+  // 勾选框：官方 Checkbox 给 input 的那三件（16px 见方 / accent-color 跟随品牌色 /
+  // 官方焦点环）。【变异测试补的断言】G2「焦点环改成 none」曾经存活 ——
+  // 规则写了但没人核对，键盘用户就没有任何可见焦点指示。
+  const check = rule(".dscc-row-check");
+  assert.match(check, /width:\s*16px/, "勾选框必须 16px 见方（官方 Checkbox）");
+  assert.match(check, /height:\s*16px/, "勾选框必须 16px 见方（官方 Checkbox）");
+  assert.match(check, /accent-color:\s*var\(--dsw-alias-brand-primary\)/, "勾选框必须用品牌色 accent-color（官方）");
+  assert.match(
+    rule(".dscc-row-check:focus-visible"),
+    /outline:\s*var\(--dsw-focus-ring-width\)\s+solid\s+var\(--dsw-focus-ring-color/,
+    "勾选框必须有官方焦点环（否则键盘用户看不到焦点在哪）",
+  );
+
+  // ── 官方令牌尺度表：值一旦和主题包实测不符，说明抄错了档位 ──
+  const usedTokens = [...sheet.matchAll(/var\((--[a-z0-9-]+)/g)].map((m) => m[1]);
+  for (const [token, px] of Object.entries(TOKEN_SCALES)) {
+    if (token.startsWith("--dsw-radius")) {
+      assert.ok(usedTokens.includes(token), `圆角令牌 ${token}（=${px}）必须真的被使用`);
+    }
+  }
 });
 
 /**
@@ -606,6 +802,41 @@ test("R-22/R-25 收紧：不得按 class 选择器或 document 查询宿主 DOM"
 });
 
 /**
+ * 【死规则防线】CSS 里声明的每一个 .dscc-* 类，必须真的出现在 JSX 侧。
+ *
+ * 【这条测试怎么来的 · 一次真实抓到的 bug】
+ * 把搜索框从「input 直接挂两个类」换成官方 Input 的 wrap 两层结构后，
+ * 规则 .dscc-input.dscc-filters-search 就再也匹配不到任何元素了 ——
+ * 而它的级联断言**只读 CSS 文本、不看 DOM**，于是测试照样绿。
+ * 变异测试（D1/D2）把它抓了出来。同一轮又扫出 .dscc-card-surface、
+ * .dscc-check、.dscc-list-head、.dscc-panel-result 四条同样匹配不到元素的规则。
+ *
+ * 所以这里做**全量**核对：CSS 里每个 .dscc-xxx 选择器都要在
+ * 样式表之外的源码里出现过（作为 className 的一部分）。
+ * 匹配不到 = 纯装饰 = 改它不会有任何测试变红，必须清掉。
+ *
+ * 已知限制（如实说明）：这只能证明「这个名字在代码里出现过」，
+ * 不能证明「这个元素真的被渲染出来」。后者要靠渲染测试
+ * （见 render.test.mjs 里对搜索框外层类名的 DOM 断言）。
+ */
+test("死规则防线：CSS 里每个 .dscc-* 类都必须被 JSX 使用", async () => {
+  const source = await readFile(CLIENT_PATH, "utf8");
+  const cssMatch = source.match(/const CSS = `([\s\S]*?)`;/);
+  assert.ok(cssMatch, "必须能找到 CSS 块");
+  const sheet = cssMatch[1];
+
+  // 样式表以外的部分（JSX 与逻辑）才是"使用处"。
+  const outside = source.replace(cssMatch[0], "");
+
+  const declared = new Set();
+  for (const m of sheet.matchAll(/\.(dscc-[a-z][a-z0-9-]*)/g)) declared.add(m[1]);
+  assert.ok(declared.size >= 40, `应当声明了足够多的类，实际 ${declared.size}`);
+
+  const dead = [...declared].filter((name) => !outside.includes(name));
+  assert.deepEqual(dead, [], `以下 CSS 类在 JSX 侧从不出现（死规则，匹配不到任何元素）：${dead.join(", ")}`);
+});
+
+/**
  * CSS 块的结构完整性（**可达**的检查）。
  *
  * 【诚实说明】「CSS 模板串里混进裸反引号」这个坑我踩过两次，但它的真实防线是
@@ -642,8 +873,8 @@ test("client.js：CSS 块括号配平且关键规则齐备（可达的结构检�
     assert.match(css, re, `CSS 缺少关键规则：${name}`);
   }
 
-  // 不得引用不存在的令牌（R-24 的补充：全表里没有的三个名字）
-  for (const bogus of ["--dsw-alias-danger", "--dsw-alias-hairline", "--dsw-alias-interactive-bg-hover"]) {
+  // 不得引用不存在的令牌（R-24 的补充：全表里没有的两个名字）
+  for (const bogus of ["--dsw-alias-danger", "--dsw-alias-hairline"]) {
     assert.equal(css.includes(`var(${bogus})`), false, `不得引用不存在的令牌：${bogus}`);
   }
 
@@ -721,7 +952,15 @@ test("面板文案：zh / en 两个字典的 key 集合一致（R-28 多语言�
  * 但文字色仍是变体声明的 `--dsw-alias-bg-base`（应用底色）。
  * 结果：浅色面 + 底色文字 ⇒ 对比度≈0，鼠标移上去按钮文字就「消失」。
  *
- * 这里在**文本层**做结构断言：hover 换底不得再作用于变体按钮。
+ * 【这一版为什么 primary 改成"换底"了】
+ * 官方 Button 的 primary 档本来就是**换底**：hover 换到 button-primary-hover，
+ * 而文字色始终是 label-primary-foreground（一个"配在主色上的前景"令牌）。
+ * 旧 bug 的成因不是"换底"本身，而是**换底规则没有排除变体**，
+ * 于是把实心背景换成了浅色面、文字却还是深色 —— 两边不同步才看不见。
+ * 所以这里的不变量是两条：
+ *   1. 中性换底规则必须排除实心变体（否则旧 bug 复发）；
+ *   2. 实心变体换底时，底色与文字必须**同时**由官方令牌给出（不得一边换一边不换）。
+ * danger 档官方没有对应令牌，沿用本插件的亮度微调 —— 那也是底与字同步变化。
  */
 test("R-24/可用性：hover 换底不得覆盖实心变体按钮（回归：悬停即消失）", async () => {
   const source = await readFile(CLIENT_PATH, "utf8");
@@ -729,20 +968,30 @@ test("R-24/可用性：hover 换底不得覆盖实心变体按钮（回归：悬
   assert.ok(css, "必须能找到 CSS 块");
   const sheet = css[1];
 
-  // 变体按钮必须显式排除在 hover 换底之外
-  // （官方形态多了 :not(:disabled)，但那不是放宽——禁用态本就不该有 hover 底色）
+  // (1) 变体按钮必须显式排除在中性换底之外
   assert.match(
     sheet,
     /\.dscc-btn:not\(\.dscc-btn-primary\):not\(\.dscc-btn-danger\):not\(:disabled\):hover/,
-    "hover 换底必须排除 primary/danger 变体（以及禁用态）",
+    "中性 hover 换底必须排除 primary/danger 变体（以及禁用态）",
   );
-  // 变体自己的 hover 只能做亮度微调（同时等比改变文字与背景，保住对比度）
+  // (2) primary 走官方换底令牌，且前景色由官方"主色上的前景"令牌给出 —— 两边同步
   assert.match(
     sheet,
-    /\.dscc-btn-primary:hover:not\(:disabled\),\s*\.dscc-btn-danger:hover:not\(:disabled\)\s*\{\s*filter:\s*brightness/,
-    "变体按钮的 hover 必须用 filter 微调而非换底",
+    /\.dscc-btn-primary:hover:not\(:disabled\)\s*\{\s*background:\s*var\(--dsw-alias-button-primary-hover\)/,
+    "primary 悬停必须换官方 button-primary-hover 底色",
   );
-  // 旧的裸 hover 换底规则不得残留
+  assert.match(
+    sheet,
+    /\.dscc-btn-primary\s*\{[^}]*color:\s*var\(--dsw-alias-label-primary-foreground\)/,
+    "primary 文字必须是 label-primary-foreground（换底后对比度才不丢）",
+  );
+  // (3) danger 没有官方 hover 令牌，必须用亮度微调（底与字同步变化）
+  assert.match(
+    sheet,
+    /\.dscc-btn-danger:hover:not\(:disabled\)\s*\{\s*filter:\s*brightness/,
+    "danger 悬停必须用 filter 微调（换底会重现旧 bug）",
+  );
+  // (4) 旧的裸 hover 换底规则不得残留
   assert.equal(
     /(^|[\s}])\.dscc-btn:hover\s*\{/.test(sheet),
     false,

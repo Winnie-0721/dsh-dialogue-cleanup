@@ -546,15 +546,24 @@ test("渲染：t 席位缺席时自动退到 bind / 内置表（不得渲染成�
  * 【默认值是 show 而非官方的 default】本插件是清理工具，归档 ≠ 删除（仍占磁盘），
  * 默认隐藏已归档会让用户看不到本该能清理的会话。用户明确要求默认显示已归档。
  */
-test("渲染：面板提供归档三选一（默认显示已归档）", () => {
-  const app = boot({ hostActive: "zh" });
-  const entry = app.byName.get(SECTION_SLOT);
-  app.beginRender();
-  const tree = app.render(app.React.createElement(entry.component, { close: () => {} }));
-
-  // 筛选字段：每个 <label class="dscc-field">（display:contents）里有
-  // 「.dscc-field-label 文字 + select」。按 label 内取，同时锁定「每个下拉都有可见标签」。
-  const selectsByLabel = new Map();
+/**
+ * 取出某个筛选字段的「选择器药丸」，并展开它的下拉。
+ *
+ * 【为什么不是找 select】原生 select 的下拉面板由操作系统绘制 —— 直角、
+ * 不跟随主题，正是用户报「不统一」的主要来源。官方在同一个设置页里
+ * （dsh-client-locale 的语言行）用的是 button 药丸 + primitives 的 Menu，
+ * 本插件照抄，所以这里必须按新形态取：
+ *   .dscc-field（display:contents）
+ *     ├ .dscc-field-label   可见标签
+ *     └ .dscc-select-root   SelectMenu 的根
+ *         ├ button.dscc-selector   药丸（aria-haspopup=menu）
+ *         └ div.dscc-menu（仅 open 时）> button.dscc-menu-item
+ *
+ * 展开方式：调药丸的 onClick 把 open 翻成 true，再渲染一次。
+ * 这个替身的 useState 跨渲染保留值（见 makeReact 的注释），所以可行。
+ */
+function filterFields(app, tree) {
+  const fields = [];
   (function walk(node) {
     if (node === null || node === undefined || typeof node !== "object") return;
     if (Array.isArray(node)) { node.forEach(walk); return; }
@@ -564,36 +573,92 @@ test("渲染：面板提供归档三选一（默认显示已归档）", () => {
       const span = kids.find(
         (c) => typeof c?.props?.className === "string" && c.props.className.includes("dscc-field-label"),
       );
-      const select = kids.find((c) => c?.type === "select");
-      if (span !== undefined && select !== undefined) {
-        selectsByLabel.set(collectText(span).join(""), select);
+      const root = kids.find(
+        (c) => typeof c?.props?.className === "string" && c.props.className.includes("dscc-select-root"),
+      );
+      if (span !== undefined && root !== undefined) {
+        fields.push({ label: collectText(span).join(""), root });
       }
     }
     for (const c of node.children ?? []) walk(c);
   })(tree);
+  return fields;
+}
 
-  const labelKeys = [...selectsByLabel.keys()];
-  assert.ok(labelKeys.length >= 5, `必须有 5 个带可见标签的筛选下拉，实际 ${labelKeys.length}`);
+/** 药丸按钮（含当前值文字与 aria 属性）。 */
+function selectorOf(field) {
+  const button = (field.root.children ?? []).find(
+    (c) => c?.type === "button" && typeof c.props?.className === "string" && c.props.className.includes("dscc-selector"),
+  );
+  return button ?? null;
+}
 
-  const archivedSelect = selectsByLabel.get("归档");
-  assert.ok(archivedSelect, "必须渲染出「归档」筛选下拉（且带可见标签）");
-  assert.equal(archivedSelect.props.value, "show", "默认必须是 show（显示已归档）");
+/** 展开该字段并返回下拉项（value 从 aria/文字取不到，故返回文字 + 节点）。 */
+function openDropdown(app, field) {
+  const trigger = selectorOf(field);
+  assert.ok(trigger, `字段「${field.label}」必须渲染出选择器药丸`);
+  trigger.props.onClick();
+  app.beginRender();
+  const entry = app.byName.get(SECTION_SLOT);
+  const again = app.render(app.React.createElement(entry.component, { close: () => {} }));
+  const refound = filterFields(app, again).find((f) => f.label === field.label);
+  const menu = (refound?.root.children ?? []).find(
+    (c) => typeof c?.props?.className === "string" && c.props.className.split(/\s+/).includes("dscc-menu"),
+  );
+  return { menu, trigger: selectorOf(refound) ?? trigger };
+}
 
-  const values = archivedSelect.children.map((opt) => opt.props.value);
-  assert.deepEqual(values, ["default", "show", "only"], "必须三选一，且与官方取值一致");
-  const optionTexts = archivedSelect.children.map((opt) => collectText(opt).join(""));
-  assert.match(optionTexts.join(" "), /隐藏已归档/);
-  assert.match(optionTexts.join(" "), /全部对话/);
-  assert.match(optionTexts.join(" "), /仅显示已归档/);
+test("渲染：面板提供归档三选一（默认显示已归档）", () => {
+  const app = boot({ hostActive: "zh" });
+  const entry = app.byName.get(SECTION_SLOT);
+  app.beginRender();
+  const tree = app.render(app.React.createElement(entry.component, { close: () => {} }));
+
+  const fields = filterFields(app, tree);
+  assert.ok(fields.length >= 5, `必须有 5 个带可见标签的筛选控件，实际 ${fields.length}`);
+
+  // 每个控件都必须有可见标签 + 药丸 + aria-haspopup（官方语言行同款）。
+  for (const field of fields) {
+    const trigger = selectorOf(field);
+    assert.ok(trigger, `字段「${field.label}」必须有选择器药丸（不得回到原生 select）`);
+    assert.equal(trigger.props["aria-haspopup"], "menu", "药丸必须声明 aria-haspopup=menu（官方同款）");
+    assert.equal(trigger.props["aria-expanded"], false, "未展开时 aria-expanded 必须是 false");
+  }
+  // 结构不变量：源码里不得再出现原生 select 元素。
+  const source = readFileSync(CLIENT_PATH, "utf8");
+  assert.equal(
+    /h\(\s*"select"/.test(source),
+    false,
+    "不得再渲染原生 select —— 它的下拉面板由操作系统绘制，与官方主题割裂",
+  );
+
+  const archived = fields.find((f) => f.label === "归档");
+  assert.ok(archived, "必须渲染出「归档」筛选字段（且带可见标签）");
+  // 默认值直接看药丸上显示的文字：默认 show ⇒「全部对话（显示已归档）」。
+  const archivedText = collectText(selectorOf(archived)).join("");
+  assert.match(archivedText, /全部对话/, `归档默认必须是 show（显示已归档），药丸实际显示：${archivedText}`);
+
+  const opened = openDropdown(app, archived);
+  assert.ok(opened.menu, "点击药丸必须展开下拉");
+  assert.equal(opened.trigger.props["aria-expanded"], true, "展开后 aria-expanded 必须是 true");
+  assert.equal(opened.menu.props.role, "menu", "下拉必须是 role=menu（官方同款）");
+  const items = (opened.menu.children ?? []).filter(
+    (c) => typeof c?.props?.className === "string" && c.props.className.includes("dscc-menu-item"),
+  );
+  assert.equal(items.length, 3, "归档必须三选一");
+  const texts = items.map((c) => collectText(c).join(""));
+  assert.match(texts.join(" "), /隐藏已归档/);
+  assert.match(texts.join(" "), /全部对话/);
+  assert.match(texts.join(" "), /仅显示已归档/);
+  // 官方 Menu 的选中语义：aria-checked 落在当前值那一行。
+  const checked = items.filter((c) => c.props["aria-checked"] === true);
+  assert.equal(checked.length, 1, "必须恰好一行标为选中（aria-checked）");
+  assert.match(collectText(checked[0]).join(""), /全部对话/, "选中行必须是当前值 show");
 
   // 会话类型三选一（照官方默认隐藏子代理）。
-  const kindSelect = selectsByLabel.get("会话类型");
-  assert.ok(kindSelect, "必须渲染出「会话类型」筛选下拉");
-  assert.equal(kindSelect.props.value, "main", "默认必须是 main（只显示主会话）");
-  assert.deepEqual(
-    kindSelect.children.map((opt) => opt.props.value),
-    ["main", "subagent", "all"],
-  );
+  const kind = fields.find((f) => f.label === "会话类型");
+  assert.ok(kind, "必须渲染出「会话类型」筛选字段");
+  assert.match(collectText(selectorOf(kind)).join(""), /主会话/, "会话类型默认必须是 main");
 });
 
 /**
@@ -654,6 +719,7 @@ test("渲染：筛选区用定宽网格 + 列表用卡片行（布局回归）",
 
   const pick = (root) => {
     let filtersCard = null, grid = null, legacyToolbar = null, legacyTable = null, firstRow = null;
+    let searchWrap = null, searchInput = null;
     (function walk(node) {
       if (node === null || node === undefined || typeof node !== "object") return;
       if (Array.isArray(node)) { node.forEach(walk); return; }
@@ -662,10 +728,12 @@ test("渲染：筛选区用定宽网格 + 列表用卡片行（布局回归）",
       if (cls.includes("dscc-filters-grid")) grid = node;
       if (cls.includes("dscc-panel-toolbar")) legacyToolbar = node;
       if (cls.includes("dscc-panel-table")) legacyTable = node;
+      if (cls.includes("dscc-search")) searchWrap = node;
+      if (cls.includes("dscc-input") && node.type === "input") searchInput = node;
       if (cls.includes("dscc-row") && firstRow === null) firstRow = node;
       for (const c of node.children ?? []) walk(c);
     })(root);
-    return { filtersCard, grid, legacyToolbar, legacyTable, firstRow };
+    return { filtersCard, grid, legacyToolbar, legacyTable, firstRow, searchWrap, searchInput };
   };
 
   const firstPicked = pick(first);
@@ -673,6 +741,18 @@ test("渲染：筛选区用定宽网格 + 列表用卡片行（布局回归）",
   assert.equal(firstPicked.legacyToolbar, null, "不得残留 flex-wrap 的旧工具条");
   assert.ok(firstPicked.grid, "筛选字段必须放在 .dscc-filters-grid 定宽网格里");
   assert.equal(firstPicked.legacyTable, null, "列表不得再用表格（改用卡片行）");
+
+  // 【死规则防线】CSS 里的 .dscc-search.dscc-filters-search 必须真的匹配到元素。
+  // 级联断言只看 CSS 文本，看不出「规则匹配不到任何东西」—— 上一版结构从
+  // 「input 直接挂两个类」换成官方 Input 的 wrap 两层后，旧选择器就成了
+  // 纯装饰，而它的断言照样绿。这条 DOM 断言把类名与规则钉在一起。
+  assert.ok(firstPicked.searchWrap, "必须渲染出搜索框外层 .dscc-search（官方 Input 是 wrap 包 input 两层）");
+  const wrapCls = String(firstPicked.searchWrap.props.className).split(/\s+/);
+  assert.ok(
+    wrapCls.includes("dscc-search") && wrapCls.includes("dscc-filters-search"),
+    `占格子的外层必须同时挂 dscc-search 与 dscc-filters-search，实际：${wrapCls.join(" ")}`,
+  );
+  assert.ok(firstPicked.searchInput, "必须渲染出 .dscc-input 输入元素");
 
   // 卡片行：每行 = 勾选框 + 主内容 + 右侧（徽标/操作）
   const secondPicked = pick(second);
@@ -772,10 +852,20 @@ test("布局 CSS：筛选网格标签列与控件列都定宽，行内容可省�
   assert.ok(btnRule, "必须有 .dscc-btn 规则");
   assert.match(btnRule[1], /white-space:\s*nowrap/, "按钮文字必须 nowrap（否则「刷新」会竖排）");
   // 搜索框占满主列；宽度交给网格轨道，不要再回到 width:auto/flex-basis 那套。
+  // 【为什么类组合是 search 而不是 input】官方 Input 是 wrap 包 input 两层，
+  // 占格子的是外层 wrap。级联断言只看 CSS 文本，看不出「这条规则匹配不到任何元素」，
+  // 所以下面渲染测试里另有一条 DOM 断言核对真实类名（见「筛选区用定宽网格」）。
   assert.equal(
-    cascadeWinner(sheet, "dscc-input dscc-filters-search", "width"),
+    cascadeWinner(sheet, "dscc-search dscc-filters-search", "width"),
     "100%",
-    "搜索框必须占满所在列（右边界才能与筛选网格一致）",
+    "搜索框外层必须占满所在列（右边界才能与筛选网格一致）",
+  );
+  // 死规则防线：CSS 里不得再出现只挂在内层 input 上的那份旧规则
+  // （结构换成 wrap 之后它匹配不到任何元素，是纯装饰）。
+  assert.equal(
+    /\.dscc-input\.dscc-filters-search\s*\{/.test(sheet),
+    false,
+    "不得残留 .dscc-input.dscc-filters-search（wrap 结构下它是匹配不到元素的死规则）",
   );
 
   // 【M1 回归】面板高度/内边距的覆盖同理必须真的生效。
