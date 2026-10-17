@@ -846,6 +846,71 @@ test("渲染：从下拉选一项必须改变请求参数并重发", async () =>
 });
 
 /**
+ * 【如实上报的最后一环】Host 的 `titles.truncated > 0` 必须在界面显示出来。
+ *
+ * service.js 步骤 5b 的承诺是：标题预算（titleLimit）之外的行只按廉价字段匹配，
+ * 超出量如实上报给界面提示「按标题搜索可能不完整」。界面不许假装搜过 ——
+ * 静默漏报正是「搜索标题永远 0 条」那条 bug 的原罪。
+ * 这条测试钉住两个方向：truncated>0 必须有提示、truncated=0 不许有无中生有的警告。
+ */
+test("渲染：标题预算外（truncated>0）必须显示「结果可能不完整」提示", async () => {
+  const listBodyWith = (truncated) => ({
+    ok: true,
+    value: {
+      total: 1,
+      page: { page: 1, pageSize: 50, pages: 1 },
+      items: [
+        {
+          sessionId: "session-aaaa",
+          title: "论文",
+          project: "E:\\p",
+          workspaceTitle: "p",
+          running: false,
+          blank: false,
+          live: true,
+          persisted: true,
+          archived: false,
+          subagent: false,
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-02T00:00:00.000Z",
+          deletable: true,
+          blockedReason: null,
+        },
+      ],
+      projects: ["E:\\p"],
+      archived: { filter: "show", total: 0, known: true, subagentTotal: 0 },
+      kind: { filter: "main", subagentTotal: 0, mainTotal: 1 },
+      titles: { requested: 1, cached: 1, fetched: 0, failed: 0, truncated, skipped: false },
+      tookMs: 1,
+    },
+  });
+
+  const paintWith = async (truncated) => {
+    const app = boot({
+      hostActive: "zh",
+      fetchImpl: async () => ({ status: 200, json: async () => listBodyWith(truncated) }),
+    });
+    const entry = app.byName.get(SECTION_SLOT);
+    const paint = () => {
+      app.beginRender();
+      return app.render(app.React.createElement(entry.component, { close: () => {} }));
+    };
+    paint();
+    app.flushEffects();
+    await new Promise((r) => setTimeout(r, 0));
+    const tree = paint();
+    return collectText(tree).join(" ");
+  };
+
+  const warn = await paintWith(7);
+  assert.match(warn, /标题未读/, `truncated=7 必须显示提示，实际文案：${warn}`);
+  assert.match(warn, /另有 7 行/, `提示里必须带上如实的行数（{n} 插值），实际：${warn}`);
+
+  const clean = await paintWith(0);
+  assert.ok(!clean.includes("标题未读"), "truncated=0 不许出现无中生有的「不完整」警告");
+});
+
+/**
  * 【会话 id 的显示策略】有标题的行不显示 id，无标题的行必须显示。
  *
  * 用户反馈：那串 36 字符的 UUID「在哪都能看到、貌似没有显示的必要」。

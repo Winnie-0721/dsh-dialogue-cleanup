@@ -17,7 +17,9 @@ import { dirname, join } from "node:path";
 const run = promisify(execFile);
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const CLIENT = join(root, "client.js");
+const SERVICE = join(root, "lib/service.js");
 const original = await readFile(CLIENT, "utf8");
+const originalService = await readFile(SERVICE, "utf8");
 
 const MUTANTS = [
   // ── 官方令牌被换回字面值（上一版"看着不像官方"的根因） ──
@@ -82,6 +84,16 @@ const MUTANTS = [
   ["G8 一律显示 id（回到旧行为）", ["                  row.title ? null : h(\"code\", { className: \"dscc-row-id\" }, row.sessionId),", "                  h(\"code\", { className: \"dscc-row-id\" }, row.sessionId),"]],
   ["G9 一律不显示 id（丢掉无标题的例外）", ["                  row.title ? null : h(\"code\", { className: \"dscc-row-id\" }, row.sessionId),\n                  row.title ? null : h(\"span\", { className: \"dscc-row-sep\" }, \"·\"),", "                  null,\n                  null,"]],
   ["G10 悬停提示里也丢掉 id", ["                    title: `${row.sessionId} · ${row.project ?? \"—\"} · ${formatTime(row.updatedAt ?? row.createdAt)}`,\n                  },\n                  // 【例外】", "                    title: `${row.project ?? \"—\"} · ${formatTime(row.updatedAt ?? row.createdAt)}`,\n                  },\n                  // 【例外】"]],
+
+  // ── 第三轮：搜索必须真的匹配标题 + 预算外如实上报（service.js + client.js） ──
+  // 这一组针对本轮真实修复；每条都必须让至少一条测试变红。
+  ["H1 搜索退回旧行为（不匹配 title）", ["          String(row.title ?? \"\").toLowerCase().includes(query) ||\n", ""], "service"],
+  ["H2 关键词过滤挪回取标题之前（title 恒 null）", ["    if (query !== \"\") {\n      await ensureTitles(items);", "    if (query !== \"\") {\n      void ensureTitles;"], "service"],
+  ["H3 预算外行数不报（假装全搜过）", ["      titleStat.truncated = overBudget.size;", "      titleStat.truncated = 0;"], "service"],
+  ["H4 界面丢掉「结果可能不完整」提示", ["                ((titleStat.truncated ?? 0) > 0\n                  ? t(\"panel.costTruncated\", { n: titleStat.truncated })\n                  : \"\")", "                (\"\")"]],
+  ["H5 计数不去重（两趟重复累加）", ["        const firstSeen = !counted.has(row.sessionId);\n        if (firstSeen) {\n          counted.add(row.sessionId);\n          titleStat.requested += 1;\n        }", "        const firstSeen = true;\n        if (firstSeen) {\n          titleStat.requested += 1;\n        }"], "service"],
+  ["H6 当前页不再补标题（首屏标题全空）", ["    await ensureTitles(slice);", ""], "service"],
+  ["H7 titleLimit=0 也去搜标题（最快路径失效）", ["      if (titleLimit === 0) {\n        titleStat.skipped = true;\n        return;\n      }", "      if (false) {\n        titleStat.skipped = true;\n        return;\n      }"], "service"],
 ];
 
 let killed = 0;
@@ -89,21 +101,26 @@ let survived = 0;
 const lines = [];
 
 try {
-  for (const [name, [find, replace]] of MUTANTS) {
+  for (const [name, [find, replace], target] of MUTANTS) {
+    const file = target === "service" ? SERVICE : CLIENT;
+    const source = target === "service" ? originalService : original;
     if (find === replace) {
       lines.push(`SKIP ${name} —— 查找与替换相同（变异写法无效）`);
       survived++;
       continue;
     }
-    if (!original.includes(find)) {
+    if (!source.includes(find)) {
       lines.push(`SKIP ${name} —— 原文未命中（变异写法与源码不一致，不是存活）`);
       survived++;
       continue;
     }
-    await writeFile(CLIENT, original.replace(find, replace), "utf8");
+    await writeFile(file, source.replace(find, replace), "utf8");
     let green = true;
     try {
-      await run("node", ["--test", "test/client.test.mjs", "test/render.test.mjs"], { cwd: root });
+      const suite = target === "service"
+        ? ["--test", "test/contract.test.mjs", "test/service.test.mjs"]
+        : ["--test", "test/client.test.mjs", "test/render.test.mjs"];
+      await run("node", suite, { cwd: root });
     } catch {
       green = false;
     }
@@ -114,13 +131,16 @@ try {
       lines.push(`killed ${name}`);
       killed++;
     }
-    await writeFile(CLIENT, original, "utf8");
+    await writeFile(file, source, "utf8");
   }
 } finally {
-  const now = await readFile(CLIENT, "utf8");
-  if (now !== original) {
-    lines.push("!! client.js 未还原，强制写回");
-    await writeFile(CLIENT, original, "utf8");
+  // 两个被变异的目标文件都必须回到原文（脚本改完要还原，否则套件会跑在变异态上）。
+  for (const [file, source] of [[CLIENT, original], [SERVICE, originalService]]) {
+    const now = await readFile(file, "utf8");
+    if (now !== source) {
+      lines.push(`!! ${file} 未还原，强制写回`);
+      await writeFile(file, source, "utf8");
+    }
   }
 }
 

@@ -109,6 +109,7 @@ window.__ModuleLoader__.load({
         "panel.summary": "共 {total} 个会话 · 第 {page}/{pages} 页",
         "panel.summaryFiltered": "筛选出 {shown} 个（共 {total} 个）",
         "panel.cost": "{ms} ms · 标题 命中 {cached} / 新取 {fetched}",
+        "panel.costTruncated": " · 另有 {n} 行标题未读（搜索与显示可能不完整）",
         "panel.costSkipped": "{ms} ms · 已跳过标题读取",
         "panel.prev": "上一页",
         "panel.next": "下一页",
@@ -220,6 +221,7 @@ window.__ModuleLoader__.load({
         "panel.emptyBody": "Try another keyword, or clear the filters and retry.",
         "panel.summary": "{total} sessions · page {page}/{pages}",
         "panel.cost": "{ms} ms · titles cached {cached} / fetched {fetched}",
+        "panel.costTruncated": " · {n} rows without titles (search and display may be incomplete)",
         "panel.costSkipped": "{ms} ms · title reading skipped",
         "panel.summaryFiltered": "{shown} shown of {total} sessions",
         "panel.prev": "Previous",
@@ -2249,7 +2251,13 @@ window.__ModuleLoader__.load({
                   ms: value.tookMs ?? 0,
                   cached: titleStat.cached ?? 0,
                   fetched: titleStat.fetched ?? 0,
-                })
+                }) +
+                // 【兑现 service.js 步骤 5b 的承诺】标题预算（titleLimit）之外的行
+                // 只按廉价字段匹配，必须如实告诉用户「按标题搜可能不完整」——
+                // 静默漏报是这条 bug 的原罪，界面不许假装搜过。
+                ((titleStat.truncated ?? 0) > 0
+                  ? t("panel.costTruncated", { n: titleStat.truncated })
+                  : "")
               : null;
       const pager =
         value !== null && pageInfo.pages > 1

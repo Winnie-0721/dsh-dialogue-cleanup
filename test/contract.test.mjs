@@ -890,6 +890,67 @@ test("listSessions：titleLimit=0 时完全不取标题（最快路径）", asyn
 });
 
 /**
+ * 【实测修复 · 「搜索标题」曾是句空话】
+ * 旧实现的关键词过滤排在取标题**之前**，那一刻 row.title 恒为 null：
+ * UI 占位文案写着「搜索标题、会话 id 或项目路径」，但按标题（尤其中文标题）
+ * 搜索永远 0 条 —— 在真机上实测过（关键词「删除」对存在同名标题的库返回空）。
+ * 现在标题按预算（titleLimit）补齐后才做关键词匹配；预算外的行只按廉价字段匹配，
+ * 超出量如实进 titles.truncated，界面据此提示「结果可能不完整」。
+ */
+test("listSessions：按标题搜索必须命中（回归：旧实现永远 0 条）", async () => {
+  const { service } = makePanelCtx();
+  // fixture：s-mid 的标题 = 「可删除的会话」；这个关键词在 id/路径/工作区名里都不出现。
+  const byTitle = await service.listSessions({ query: "可删除", pageSize: 10 });
+  assert.equal(byTitle.ok, true);
+  assert.deepEqual(
+    byTitle.value.items.map((r) => r.sessionId),
+    ["s-mid"],
+    "标题命中必须返回该行",
+  );
+  assert.equal(byTitle.value.total, 1);
+
+  // 中文标题的另一个子串（同样只存在于标题里）。
+  const byTitle2 = await service.listSessions({ query: "会话", pageSize: 10 });
+  assert.deepEqual(byTitle2.value.items.map((r) => r.sessionId), ["s-mid"]);
+
+  // 既有关键词面不得回归：id 与项目路径仍然可搜。
+  const byId = await service.listSessions({ query: "s-old", pageSize: 10 });
+  assert.deepEqual(byId.value.items.map((r) => r.sessionId), ["s-old"]);
+  const byPath = await service.listSessions({ query: "proj-B", pageSize: 10 });
+  assert.deepEqual(byPath.value.items.map((r) => r.sessionId), ["s-old"]);
+});
+
+test("listSessions：同一关键词第二次搜索必须吃标题缓存（不得重复读盘）", async () => {
+  const { service, titleCalls } = makePanelCtx();
+  await service.listSessions({ query: "可删除", pageSize: 10 });
+  const after = titleCalls.flat().length;
+  assert.ok(after > 0, "首次搜索确实付出了标题读取");
+  const second = await service.listSessions({ query: "可删除", pageSize: 10 });
+  assert.equal(titleCalls.flat().length, after, "第二次不得再产生标题读取");
+  assert.deepEqual(second.value.items.map((r) => r.sessionId), ["s-mid"], "结果不变");
+  // 【计数去重】带关键词的请求走两趟 ensureTitles（候选集 + 当前页），
+  // 同一行可能落在两趟里。计数必须是「这次请求的代价」、按 sessionId 去重，
+  // 否则「命中 N / 请求 N」会翻倍虚报（这个回归曾在旧草稿里真实出现）。
+  assert.equal(second.value.titles.requested, 3, "请求数按行去重（3 行候选），不是趟数之和");
+  assert.equal(second.value.titles.cached, 3, "3 行全部来自缓存（第二次零读盘）");
+  assert.equal(second.value.titles.fetched, 0);
+});
+
+test("listSessions：标题预算之外的行必须如实上报 truncated（不假装搜过）", async () => {
+  // titleLimit=1：预算只够排在最前的 1 行（s-new，updatedAt 9000）。
+  // 「可删除的会话」属于 s-mid —— 在预算外，fold 不到，只能按廉价字段匹配。
+  // 契约要求：这一条**必须如实**进 truncated，让界面能提示结果可能不完整，
+  // 而不是静默漏报（静默漏报正是这条 bug 的原罪）。
+  const { service, titleCalls } = makePanelCtx({ config: { titleLimit: 1 } });
+  const result = await service.listSessions({ query: "可删除", pageSize: 10 });
+  assert.equal(result.ok, true);
+  assert.equal(result.value.items.length, 0, "预算外行的标题不可见（如实）");
+  assert.ok(result.value.titles.truncated > 0, `truncated 必须 > 0，实际 ${result.value.titles.truncated}`);
+  assert.equal(result.value.titles.requested, 1, "只按预算取 1 条");
+  assert.equal(titleCalls.flat().length, 1, "恰好一次读取（预算 1 行）");
+});
+
+/**
  * 归档三选一（取值照官方 `archivedFilter: 'default' | 'show' | 'only'`），
  * 但**默认值是 show** —— 本插件是清理工具，归档 ≠ 删除（仍占磁盘），
  * 默认隐藏已归档会让用户看不到本该能清理的会话。用户明确要求默认显示已归档。
