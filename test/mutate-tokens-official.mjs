@@ -88,12 +88,16 @@ const MUTANTS = [
   // ── 第三轮：搜索必须真的匹配标题 + 预算外如实上报（service.js + client.js） ──
   // 这一组针对本轮真实修复；每条都必须让至少一条测试变红。
   ["H1 搜索退回旧行为（不匹配 title）", ["          String(row.title ?? \"\").toLowerCase().includes(query) ||\n", ""], "service"],
-  ["H2 关键词过滤挪回取标题之前（title 恒 null）", ["    if (query !== \"\") {\n      await ensureTitles(items);", "    if (query !== \"\") {\n      void ensureTitles;"], "service"],
+  ["H2 关键词过滤不做标题补齐（回到 title 恒 null）", ["      await ensureTitles(items, titleSearchLimit);\n", ""], "service"],
   ["H3 预算外行数不报（假装全搜过）", ["      titleStat.truncated = overBudget.size;", "      titleStat.truncated = 0;"], "service"],
   ["H4 界面丢掉「结果可能不完整」提示", ["                ((titleStat.truncated ?? 0) > 0\n                  ? t(\"panel.costTruncated\", { n: titleStat.truncated })\n                  : \"\")", "                (\"\")"]],
   ["H5 计数不去重（两趟重复累加）", ["        const firstSeen = !counted.has(row.sessionId);\n        if (firstSeen) {\n          counted.add(row.sessionId);\n          titleStat.requested += 1;\n        }", "        const firstSeen = true;\n        if (firstSeen) {\n          titleStat.requested += 1;\n        }"], "service"],
   ["H6 当前页不再补标题（首屏标题全空）", ["    await ensureTitles(slice);", ""], "service"],
   ["H7 titleLimit=0 也去搜标题（最快路径失效）", ["      if (titleLimit === 0) {\n        titleStat.skipped = true;\n        return;\n      }", "      if (false) {\n        titleStat.skipped = true;\n        return;\n      }"], "service"],
+  // 【性能回归 · 2026-10-17 实测】搜索的标题预算必须独立于 titleLimit：
+  // 否则搜索会给整个候选集折叠标题（真机 pageSize=5 的搜索仍 requested=25、冷缓存 1059 ms）。
+  ["H8 搜索误用 titleLimit（预算随候选集膨胀）", ["      await ensureTitles(items, titleSearchLimit);", "      await ensureTitles(items);"], "service"],
+  ["H9 搜索预算被设成无穷（整候选集都读标题）", ["    const titleSearchLimit = Number.isInteger(config.titleSearchLimit)\n      ? Math.max(config.titleSearchLimit, 0)\n      : 40;", "    const titleSearchLimit = Number.POSITIVE_INFINITY;"], "service"],
 ];
 
 let killed = 0;

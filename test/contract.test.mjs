@@ -937,17 +937,55 @@ test("listSessions：同一关键词第二次搜索必须吃标题缓存（不�
 });
 
 test("listSessions：标题预算之外的行必须如实上报 truncated（不假装搜过）", async () => {
-  // titleLimit=1：预算只够排在最前的 1 行（s-new，updatedAt 9000）。
+  // titleSearchLimit=1：搜索预算只够排在最前的 1 行（s-new，updatedAt 9000）。
   // 「可删除的会话」属于 s-mid —— 在预算外，fold 不到，只能按廉价字段匹配。
   // 契约要求：这一条**必须如实**进 truncated，让界面能提示结果可能不完整，
   // 而不是静默漏报（静默漏报正是这条 bug 的原罪）。
-  const { service, titleCalls } = makePanelCtx({ config: { titleLimit: 1 } });
+  const { service, titleCalls } = makePanelCtx({ config: { titleSearchLimit: 1 } });
   const result = await service.listSessions({ query: "可删除", pageSize: 10 });
   assert.equal(result.ok, true);
   assert.equal(result.value.items.length, 0, "预算外行的标题不可见（如实）");
   assert.ok(result.value.titles.truncated > 0, `truncated 必须 > 0，实际 ${result.value.titles.truncated}`);
   assert.equal(result.value.titles.requested, 1, "只按预算取 1 条");
   assert.equal(titleCalls.flat().length, 1, "恰好一次读取（预算 1 行）");
+});
+
+/**
+ * 【性能回归 · 2026-10-17 实测】搜索的标题成本**不得随候选集规模线性膨胀**。
+ *
+ * 上一轮让关键词也匹配标题后，搜索会给整个候选集折叠标题：真机上实测
+ * pageSize=5 的搜索仍 requested=25，冷缓存 **1059 ms**（单条约 350 ms，8 并发）。
+ * titleLimit=100 在候选集 <100 时形同虚设 —— 库一大就是秒级卡顿。
+ * 所以搜索改走独立的 titleSearchLimit（默认 40）。
+ *
+ * 这条测试把「独立预算」钉死：把 titleLimit 设成很大（模拟「当前页预算很宽」），
+ * 搜索仍必须只按 titleSearchLimit 取标题；否则就是又回到了随候选集膨胀的老路。
+ */
+test("listSessions：搜索的标题预算独立于 titleLimit，不随候选集膨胀（性能回归）", async () => {
+  // 造 30 条候选（远超搜索预算 3），并让 titleLimit 很宽 —— 若搜索误用 titleLimit，
+  // 就会去取 30 条标题，requested 会变成 30。
+  const records = Array.from({ length: 30 }, (_, i) => ({
+    header: { id: `s-${i}`, cwd: "E:\\p", createdAt: 1000 + i },
+    live: true,
+    persisted: true,
+  }));
+  const { service, titleCalls } = makePanelCtx({
+    records,
+    summaries: records.map((r) => ({
+      sessionId: r.header.id,
+      running: false,
+      blank: false,
+      updatedAt: 1000,
+    })),
+    config: { titleLimit: 200, titleSearchLimit: 3 },
+  });
+
+  const result = await service.listSessions({ query: "no-such-keyword", pageSize: 5 });
+  assert.equal(result.ok, true);
+  assert.equal(result.value.titles.requested, 3, `搜索只该按 titleSearchLimit=3 取标题，实际 ${result.value.titles.requested}`);
+  assert.equal(titleCalls.flat().length, 3, "恰好 3 次标题读取（预算 3）");
+  // 预算外必须如实上报（30 - 3 = 27 行没读标题）。
+  assert.equal(result.value.titles.truncated, 27, "预算外 27 行必须如实进 truncated");
 });
 
 /**
