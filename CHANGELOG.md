@@ -2,6 +2,95 @@
 
 ## 未发布
 
+### 稳定性与安全性整改：删除事务的状态一致性、路径越界与静默失败
+
+本轮以「先复现、后修改」推进，**复现并修复 5 个真实缺陷**（2 个 P0 数据/安全级、
+3 个 P1 状态一致性级），并补强了 3 处「测试自身太弱」（变异测试抓出）。
+完整报告见 [docs/整改报告-稳定性与安全性.md](docs/整改报告-稳定性与安全性.md)。
+
+#### P0-1 磁盘删除整步失败被吞，事务仍报完整成功
+
+`removeArtifacts` 原来 `catch { return {count:0} }`，把**所有** `readdir` 失败都当成
+「根不存在，没什么可删」。实测把 `<DSH_HOME>/sessions` 做成一个**文件**（`readdir` 抛
+`ENOTDIR`）后，删除仍返回 `ok:true / detach:"detached" / files:0 / partial:false` ——
+与一次完全干净的删除**逐字节相同**，而磁盘一个字节没动。`EACCES`/`EPERM`/`EBUSY`/`EIO`
+同理，它们都意味着「**没能删**」，却与「这个会话没有磁盘工件」不可区分。
+
+现在三态分明：`ENOENT` → `rootPresent:false, error:null`（正常收尾）；
+其它错误 → `error` 如实带上 + 逐路径 `failures`；`rm` 失败逐目录记录后继续，不再直抛。
+
+#### P0-2 对偶 id 拼写守卫只看 live 会话 → 删掉另一个真实会话
+
+`isKnownSession` 只查 live 集合与 `agents.get()`，于是**已持久化但当前不 live** 的会话
+（用户关掉的、宿主重启后的）被判为「不存在」，被当成「我这个 id 的另一种拼写」而 `rm -rf`。
+实测（`p/<uuid>` 与 `q/session-<uuid>` 并存、live 为空）：`{ok:true, files:2}`，**两个目录都没了**。
+更说明问题的是重试路径：第一次因兄弟是 live 而正确跳过，用户关掉它后**重试同一请求**
+→ 兄弟目录消失 —— 守卫生效与否竟取决于「兄弟恰好是不是 live」。
+
+现在把**持久语料**（`sessionQuery.listSessions()`）纳入判据，并确立原则：
+**无法证明它不是另一个会话，就不能删它**（守卫不可用时传 `null`，随即跳过对偶拼写）。
+
+#### P0-3 `isInside` 纯字符串校验 → 父组件是 junction 时可越界删除
+
+`isInside` 不解析链接。root 下某个**项目目录**若是指向 root 之外的 junction：
+字符串仍以 root 开头 → `isInside` 通过；`lstat` 跟随父组件链接报告「普通目录、非符号链接」
+→ 符号链接守卫**也通过**；`rm(recursive)` 于是删掉 root 之外的**真实目录**。
+竞态实测：`count:201`、`error:null`、root 外的 `valuable.txt` 被删。
+
+新增 `isRealPathInside()`：`realpath()` 解析真实路径后再与解析后的 root 比较，
+**每个 `rm` 之前强制校验**；任何解析失败即拒绝（宁可不删）。复跑后同一场景变为
+拒绝删除并如实上报 `error`，外部文件存活。
+
+#### P1 删除吃实例级 TTL 快照
+
+`deleteSession` 原来直接吃 `runningSnapshot()` 的 TTL 缓存 —— 那是**实例级**的，
+可能来自上一次删除请求，于是「刚在 1 s 窗口内开始运行」的会话可能拿过期快照被判为 idle。
+现在删除默认走 `freshRunningSnapshot()`；批量由 HTTP 层在整批开始前取**一份新鲜快照**
+批内复用 —— 既满足「删除前重新验证」，又保住 O(1) 次探测（实测批量 50 条仍只探测 1 次）。
+
+#### P1 `lstat`/`rm`/工作区摘除失败被静默吞掉
+
+- `lstat` 的 `catch { continue }` 把所有错误当成「不存在」→ 权限/ELOOP/IO 失败不进 `failures`；
+- `detachWorkspaces` 返回数字 `0`，与「本来就没有工作区」无从区分；
+- `rm` 失败直抛会让事务丢掉「其它目录已删掉」的事实。
+现在分别返回 `failures` / `{removed, failures, error}`，并汇总进统一的 `degradations`。
+
+#### 统一结果模型（单条与批量共用）
+
+```js
+value.complete        // 完整成功：所有破坏性步骤都完成
+value.partial         // 至少一个破坏性步骤没完成
+value.degradations[]  // [{step, reason, failures?}] 逐项降级明细
+value.nothingDeleted  // 什么都没删到（幂等重删 / id 不存在）
+value.failures[]      // 磁盘层逐路径失败清单
+```
+
+批量信封新增 `complete / degraded / noop / degradations`，使「部分成功」不可能被报成完整成功。
+另外把「**能力缺失**」与「**真的失败**」分开：`announce` 的 `no-emit`/`disabled`
+是能力/配置选择（由 `capabilities()` 上报），不计入降级；`emit-threw` 才计入。
+
+#### 测试与变异
+
+- 新增 `test/fault-injection.test.mjs`（18 条）：逐个破坏每个破坏性步骤，
+  并含**反方向**断言（全绿时不得误报降级）。含 junction 静态 + 竞态用例。
+- 为**确定性**覆盖错误分支，`artifacts.js` 新增可注入 fs 的 `removeArtifactsWithFs()`
+  —— 真实文件系统上很难确定性触发 `rm EPERM`（实测 Windows 打开文件句柄也拦不住 rm），
+  于是那两行长期**无测试保护**：变异 N3/N4 把错误记录删掉时全套测试**全绿**过。
+- 变异目标扩展到 `lib/artifacts.js`，新增 N1–N9，全套 **71/71 killed、0 survived**。
+- 测试总数 **207**（204 pass / 0 fail / 3 平台跳过）。
+
+#### 如实记录的未解决风险
+
+状态检查与磁盘删除之间的理论竞态仍在（宿主未提供会话锁的公开能力）·
+`detachLiveStore` 分支①在出现公开 detach 后需补「调用后校验 + await」（当前运行时无该入口）·
+`sessions.list()` 读失败仍为静默 · 目录符号链接作为项目目录时不记 `skipped` ·
+审计日志约 910 B/行且无轮转。详见报告 §6。
+
+> 真实 DSH 集成检查（只读，7/7 通过）与模拟集成测试分别陈述 —— **未做**真实宿主上的
+> 破坏性集成测试（会删用户真实会话），不以模拟结果冒充。
+
+---
+
 ### 修复：删除结果框被设置页压住（要关掉设置界面才看得见）——改用 <dialog> 进 top layer
 
 **用户实测**：「批量删除结果」这个框没有置顶在窗口之上，必须关掉设置界面才看得到。

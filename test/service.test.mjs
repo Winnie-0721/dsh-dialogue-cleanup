@@ -171,7 +171,12 @@ test("detachLiveStore：entry.detach 调用后仍未移除 → failed（不谎�
 
 test("detachWorkspaces：**不得**在 detachSession 缺失时虚增计数（修正上游 D7）", async () => {
   const registry = { list: () => [{ sessionIds: ["s1"] }] }; // 没有 detachSession
-  assert.equal(await detachWorkspaces(registry, "s1"), 0);
+  const out = await detachWorkspaces(registry, "s1");
+  assert.equal(out.removed, 0);
+  // 【P0 修复 · 2026-10-18】认领了会话却没有摘除入口 = **降级**，必须如实带出来，
+  // 不能再像原来那样只返回 0（与「本来就没有工作区」无法区分）。
+  assert.ok(out.error !== null, "没有 detachSession 必须如实报降级");
+  assert.equal(out.failures.length, 1);
 });
 
 test("detachWorkspaces：真正调用成功才计数", async () => {
@@ -179,18 +184,23 @@ test("detachWorkspaces：真正调用成功才计数", async () => {
   const registry = {
     list: () => [{ sessionIds: ["s1"], detachSession: async () => { called += 1; } }],
   };
-  assert.equal(await detachWorkspaces(registry, "s1"), 1);
+  const out = await detachWorkspaces(registry, "s1");
+  assert.equal(out.removed, 1);
+  assert.equal(out.error, null, "全部成功时不得报降级");
   assert.equal(called, 1);
 });
 
-test("detachWorkspaces：detachSession 抛错时不计入、不对外抛错", async () => {
+test("detachWorkspaces：detachSession 抛错时不计入、不对外抛错，但如实报降级", async () => {
   const registry = {
     list: () => [{
       sessionIds: ["s1"],
       detachSession: async () => { throw new Error("workspace detach failed"); },
     }],
   };
-  assert.equal(await detachWorkspaces(registry, "s1"), 0);
+  const out = await detachWorkspaces(registry, "s1");
+  assert.equal(out.removed, 0);
+  assert.match(out.error, /workspace detach failed/, "必须把失败原因如实带出来");
+  assert.equal(out.failures.length, 1);
 });
 
 test("detachWorkspaces：sessionIds 是只读数组（getter）时也能识别", async () => {
@@ -202,7 +212,8 @@ test("detachWorkspaces：sessionIds 是只读数组（getter）时也能识别",
       detachSession: async () => { called += 1; },
     }],
   };
-  assert.equal(await detachWorkspaces(registry, "s1"), 1);
+  const out = await detachWorkspaces(registry, "s1");
+  assert.equal(out.removed, 1);
   assert.equal(called, 1);
 });
 
@@ -214,13 +225,19 @@ test("detachWorkspaces：不属于该会话的工作区不动", async () => {
       { sessionIds: [], detachSession: async () => { called += 1; } },
     ],
   };
-  assert.equal(await detachWorkspaces(registry, "s1"), 0);
+  const out = await detachWorkspaces(registry, "s1");
+  assert.equal(out.removed, 0);
+  assert.equal(out.error, null, "没有工作区认领它 —— 不是降级");
   assert.equal(called, 0);
 });
 
-test("detachWorkspaces：缺少 registry / list 时返回 0", async () => {
-  assert.equal(await detachWorkspaces(undefined, "s1"), 0);
-  assert.equal(await detachWorkspaces({}, "s1"), 0);
+test("detachWorkspaces：缺少 registry / list 时 removed=0 且如实报不可用", async () => {
+  const a = await detachWorkspaces(undefined, "s1");
+  assert.equal(a.removed, 0);
+  assert.ok(a.error !== null, "registry 不可用必须如实报");
+  const b = await detachWorkspaces({}, "s1");
+  assert.equal(b.removed, 0);
+  assert.ok(b.error !== null);
 });
 
 test("clearRegistryRecords：调用公开幂等 API（unpin / unarchive），但不谎报改动数", async () => {
@@ -345,12 +362,18 @@ test("fetchRunningSnapshot：不可用/抛错时如实标记，不抛给调用�
  *
  * 旧实现逐条独立探测：200 条 = 200 次 `sessionController.list()` + 200 次
  * `sessions.list()`（实测纯探测 187 ms；live 上 `list()` 有约 100 ms 底噪，
- * 折算约 20 s）。TTL 快照把它压成 O(1)。
+ * 折算约 20 s）。
+ *
+ * 【2026-10-18 契约更新】O(1) 的位置从「TTL 缓存」换成了「批内复用一份新鲜快照」：
+ * 单条删除现在**每次都取新鲜快照**（P1 要求：删除前重新验证状态，不吃可能来自
+ * 上次请求的 TTL 缓存），而批量路径由调用方先取一份新鲜快照、批内复用 ——
+ * 既新鲜，又仍是 O(1)。这条测试按新契约断言：批内复用 → 1 次；逐条独立 → N 次。
  */
-test("批量删除：探测次数从 O(N) 降为 O(1)（runningProbeTtlMs 回归）", async () => {
+test("批量删除：探测次数从 O(N) 降为 O(1)（批内复用新鲜快照）", async () => {
   const { __resetInFlight } = await import("../lib/service.js");
 
-  async function runBatch(n, ttl) {
+  /** 模拟 index.js 的批量实现：先取一份新鲜快照，批内复用。 */
+  async function runBatch(n) {
     __resetInFlight();
     let controllerListCalls = 0;
     let sessionsListCalls = 0;
@@ -365,24 +388,47 @@ test("批量删除：探测次数从 O(N) 降为 O(1)（runningProbeTtlMs 回归
     };
     const ctx = { logger: { warn() {}, debug() {} }, get: (k) => services[k] };
     const audit = { record: async () => ({ ok: true, path: null }), enabled: false, path: null };
-    const config = resolveConfig({ audit: false, matchAlternateIdSpelling: false, runningProbeTtlMs: ttl });
+    const config = resolveConfig({ audit: false, matchAlternateIdSpelling: false });
     const service = createService(ctx, config, audit);
-    for (let i = 0; i < n; i += 1) await service.deleteSession(`s-${i}`, { kind: "test" });
+    const batchSnapshot = await service.freshRunningSnapshotForBatch();
+    for (let i = 0; i < n; i += 1) {
+      await service.deleteSession(`s-${i}`, { kind: "test" }, { runningSnapshot: batchSnapshot });
+    }
     return { controllerListCalls, sessionsListCalls };
   }
 
-  // 默认 TTL：无论删多少条，全量列表只问一次
-  const cached = await runBatch(50, 1000);
+  // 批内复用：无论删多少条，全量列表只问一次
+  const cached = await runBatch(50);
   assert.equal(cached.controllerListCalls, 1, "50 条批量只探测一次");
-
-  // live id 集合**故意不缓存**：它喂给破坏性的 alternate-spelling 守卫，
-  // 用过期数据会让守卫更可能放行删除 —— 违背「宁可不删，不可误删」。
   assert.equal(cached.sessionsListCalls, 50, "live id 集合不缓存，每条都取最新（安全优先）");
 
-  // ttl=0：退回严格语义（每条都重新探测）—— 保留给需要最强一致性的用户
-  const strict = await runBatch(10, 0);
-  assert.equal(strict.controllerListCalls, 10, "ttl=0 时必须每条都重新探测");
+  // 对照：逐条独立调用（不传快照）→ 每条都新鲜探测，安全优先
+  const fresh = await runBatchFresh(5);
+  assert.equal(fresh.controllerListCalls, 5, "单条删除每次都重新验证状态（P1 要求）");
 });
+
+/** 逐条独立删除（不传共享快照）——用于对照「新鲜探测」语义。 */
+async function runBatchFresh(n) {
+  const { __resetInFlight } = await import("../lib/service.js");
+  __resetInFlight();
+  let controllerListCalls = 0;
+  const services = {
+    sessionController: {
+      list: async () => {
+        controllerListCalls += 1;
+        return { items: [] };
+      },
+    },
+    sessions: { list: () => [], store: new Map() },
+    agents: { get: () => undefined },
+    workspaceRegistry: { list: () => [] },
+  };
+  const ctx = { logger: { warn() {}, debug() {} }, get: (k) => services[k] };
+  const audit = { record: async () => ({ ok: true, path: null }), enabled: false, path: null };
+  const service = createService(ctx, resolveConfig({ audit: false }), audit);
+  for (let i = 0; i < n; i += 1) await service.deleteSession(`fresh-${i}`, { kind: "test" });
+  return { controllerListCalls };
+}
 
 /**
  * 「删掉后又出现在未分组」的回归。

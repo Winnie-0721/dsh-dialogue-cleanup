@@ -20,6 +20,8 @@ const CLIENT = join(root, "client.js");
 const SERVICE = join(root, "lib/service.js");
 const original = await readFile(CLIENT, "utf8");
 const originalService = await readFile(SERVICE, "utf8");
+const ARTIFACTS = join(root, "lib/artifacts.js");
+const originalArtifacts = await readFile(ARTIFACTS, "utf8");
 
 const MUTANTS = [
   // ── 官方令牌被换回字面值（上一版"看着不像官方"的根因） ──
@@ -110,6 +112,18 @@ const MUTANTS = [
   ["M3 不幂等调用 showModal（重复打开抛 InvalidStateError）", ["        if (typeof element.showModal === \"function\" && element.open !== true) {", "        if (typeof element.showModal === \"function\") {"]],
   ["M4 关闭时不 close（dialog 永久留在 top layer）", ["          if (typeof element.close === \"function\" && element.open === true) {", "          if (false) {"]],
   ["M5 丢掉原生 cancel 拦截（busy 时 Esc 会关掉界面）", ["          event.preventDefault();\n          if (allowRef.current !== false) closeRef.current();", "          if (allowRef.current !== false) closeRef.current();"]],
+
+  // ── 第五轮：整改修复的回归钉（越界删除 / 静默失败 / 对偶拼写误删） ──
+  // 每条都必须让测试变红，否则「修好了」只是口号。
+  ["N1 去掉真实路径校验（父组件 junction 可越界删除）", ["      if (!(await isRealPathInside(root, dir))) {", "      if (false) {"], "artifacts"],
+  ["N2 readdir 错误重新被吞（磁盘失败又报成功）", ["    if (code === \"ENOENT\") {\n      rootPresent = false; // 根不存在：没有可删的东西，这是正常收尾\n    } else {\n      error = `${code ?? \"unknown\"}: ${String(cause?.message ?? cause)}`;\n    }", "    rootPresent = false;"], "artifacts"],
+  ["N3 rm 失败不再记录（静默跳过）", ["        failures.push(`${dir} :: ${cause?.code ?? \"unknown\"}: ${String(cause?.message ?? cause)}`);\n      }\n    }\n  }\n\n  return { count: removed.length, paths: removed, skipped, failures", "        void cause;\n      }\n    }\n  }\n\n  return { count: removed.length, paths: removed, skipped, failures"], "artifacts"],
+  ["N4 lstat 非 ENOENT 错误重新被吞", ["        if (cause?.code !== \"ENOENT\") {\n          failures.push(`${dir} :: lstat ${cause?.code ?? \"unknown\"}: ${String(cause?.message ?? cause)}`);\n        }\n        continue; // ENOENT 确实等于「不存在」——正常跳过", "        continue;"], "artifacts"],
+  ["N5 对偶拼写守卫不查持久语料（误删另一个会话）", ["      if (persistedIds !== null && persistedIds !== undefined && persistedIds.has(id)) return true;\n", ""], "service"],
+  ["N6 守卫不可用时仍然放行删除（宁可误删）", ["        const guardUsable = config.matchAlternateIdSpelling === true && persistedIds !== null;\n        const isKnownSession = guardUsable ? makeKnownSessionProbe(liveIds, persistedIds) : null;", "        const isKnownSession = makeKnownSessionProbe(liveIds, persistedIds);"], "service"],
+  ["N7 partial 退回窄定义（磁盘失败被报成完整成功）", ["          partial: degradations.length > 0,", "          partial: !detached && artifacts.count === 0,"], "service"],
+  ["N8 complete 不再反映降级清单", ["        value.complete = value.degradations.length === 0;", "        value.complete = true;"], "service"],
+  ["N9 删除不再取新鲜快照（吃过期 TTL 缓存）", ["          : await freshRunningSnapshot();", "          : await runningSnapshot();"], "service"],
 ];
 
 let killed = 0;
@@ -118,8 +132,8 @@ const lines = [];
 
 try {
   for (const [name, [find, replace], target] of MUTANTS) {
-    const file = target === "service" ? SERVICE : CLIENT;
-    const source = target === "service" ? originalService : original;
+    const file = target === "service" ? SERVICE : target === "artifacts" ? ARTIFACTS : CLIENT;
+    const source = target === "service" ? originalService : target === "artifacts" ? originalArtifacts : original;
     if (find === replace) {
       lines.push(`SKIP ${name} —— 查找与替换相同（变异写法无效）`);
       survived++;
@@ -133,9 +147,14 @@ try {
     await writeFile(file, source.replace(find, replace), "utf8");
     let green = true;
     try {
+      // 【关键】fault-injection 必须同时在 service 与 artifacts 两组里跑：
+      // 它是本轮整改的核心断言。漏掉它会让 N5–N8 这类「把修复改回旧行为」的变异
+      // 全部存活（实测踩到过：7 条存活其实是我的测试没跑）。
       const suite = target === "service"
-        ? ["--test", "test/contract.test.mjs", "test/service.test.mjs"]
-        : ["--test", "test/client.test.mjs", "test/render.test.mjs"];
+        ? ["--test", "test/contract.test.mjs", "test/service.test.mjs", "test/fault-injection.test.mjs"]
+        : target === "artifacts"
+          ? ["--test", "test/artifacts.test.mjs", "test/fault-injection.test.mjs"]
+          : ["--test", "test/client.test.mjs", "test/render.test.mjs"];
       await run("node", suite, { cwd: root });
     } catch {
       green = false;
@@ -150,8 +169,8 @@ try {
     await writeFile(file, source, "utf8");
   }
 } finally {
-  // 两个被变异的目标文件都必须回到原文（脚本改完要还原，否则套件会跑在变异态上）。
-  for (const [file, source] of [[CLIENT, original], [SERVICE, originalService]]) {
+  // 三个被变异的目标文件都必须回到原文（脚本改完要还原，否则套件会跑在变异态上）。
+  for (const [file, source] of [[CLIENT, original], [SERVICE, originalService], [ARTIFACTS, originalArtifacts]]) {
     const now = await readFile(file, "utf8");
     if (now !== source) {
       lines.push(`!! ${file} 未还原，强制写回`);
