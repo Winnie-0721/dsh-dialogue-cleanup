@@ -409,11 +409,15 @@ test("渲染：确认弹窗在无状态时返回 null，有状态时渲染 dialo
   const dialogTree = app.render(app.React.createElement(entry.component, {}));
   assert.ok(dialogTree !== null, "点击后必须渲染确认框");
 
-  // 【修复后契约】外层是 div（官方 Modal 同样不是原生 dialog），
-  // 层级由 .dscc-modal 的 position:fixed + z-index:1000 负责，
-  // 语义（role/aria-modal/aria-label）挂在外层；内层卡片不得再声明 role。
-  assert.equal(dialogTree.type, "div", "外层必须是 div（官方 Modal 形态：fixed + z-index）");
-  assert.equal(dialogTree.props.className, "dscc-modal", "外层必须挂 .dscc-modal（z-index:1000 置顶）");
+  // 【2026-10-18 用户实测修复后的契约】外层是原生 <dialog>。
+  // 用户实测：「批量删除结果」框被设置页压住，要关掉设置界面才看得见。
+  // 根因：本插件渲染在宿主 shell.overlay 槽位里，该槽位容器 .overlayLayer 是
+  // position:absolute + z-index:20 —— 它自己就是层叠上下文，所以内部的
+  // z-index:1000 只在这个容器内有效，容器整体只有 20，被设置页压住。
+  // 修法：showModal() 把 dialog 提升到浏览器 **top layer**，与任何祖先的
+  // 层叠上下文无关，必然盖住设置页。
+  assert.equal(dialogTree.type, "dialog", "外层必须是原生 <dialog>（showModal 进 top layer）");
+  assert.equal(dialogTree.props.className, "dscc-modal", "外层必须挂 .dscc-modal");
   assert.equal(dialogTree.props.role, "dialog", "外层必须带 role=dialog");
   assert.equal(dialogTree.props["aria-modal"], "true", "必须声明 aria-modal");
   assert.ok(
@@ -437,6 +441,77 @@ test("渲染：确认弹窗在无状态时返回 null，有状态时渲染 dialo
     for (const c of node.children ?? []) walk(c);
   })(dialogTree);
   assert.deepEqual(innerRoles, [], "内层卡片不得再声明 role（外层已声明模态语义）");
+});
+
+/**
+ * 【置顶修复的行为验证 · 2026-10-18】
+ *
+ * 用户实测：「批量删除结果」框被设置页压住，要关掉设置界面才看得见。
+ * 根因是 z-index 只在同一层叠上下文内比较 —— 本插件挂在宿主 shell.overlay 里，
+ * 那个容器自己是 z-index:20 的层叠上下文，所以内部再大的 z-index 也盖不过设置页。
+ *
+ * 修法：showModal() 把 <dialog> 提升到浏览器 **top layer**（与祖先无关）。
+ * 这条测试用**行为**断言而不是文本匹配，因为文本里有 `element.close` 字样
+ * 不代表它真的被调用（变异 M4 就是靠这一点存活过）。
+ *
+ * 这里提供一个带 showModal/close 的最小 dialog 元素桩，真实跑一遍：
+ *   打开 → effect 必须调 showModal()；关闭 → 清理函数必须调 close()。
+ */
+test("弹窗置顶：打开时必须 showModal()、关闭时必须 close()（行为断言）", async () => {
+  const app = boot();
+  const entry = app.byName.get(OVERLAY_SLOT);
+  assert.ok(entry, "必须注册 shell.overlay");
+
+  // 最小 DOM 元素桩：记录 showModal/close 是否真的被调用。
+  const calls = { showModal: 0, close: 0 };
+  const element = {
+    open: false,
+    ownerDocument: { activeElement: null, addEventListener() {}, removeEventListener() {} },
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    contains: () => true,
+    focus() {},
+    showModal() {
+      calls.showModal += 1;
+      this.open = true;
+    },
+    close() {
+      calls.close += 1;
+      this.open = false;
+    },
+    addEventListener() {},
+    removeEventListener() {},
+  };
+
+  // 打开对话框：先用菜单项触发模块级 dialog 状态。
+  const menu = app.byName.get(MENU_SLOT);
+  app.beginRender();
+  const menuTree = app.render(
+    app.React.createElement(menu.component, {
+      sessionId: "session-abc",
+      displayTitle: "某个会话",
+      useMenuOpenState: () => [false, () => {}],
+      t: (key) => key,
+    }),
+  );
+  menuTree.find((node) => node.type === "button").props.onClick();
+
+  // 渲染 overlay：拿到真实 dialog 元素，把 ref 指向我们的桩。
+  app.beginRender();
+  const tree = app.render(app.React.createElement(entry.component, {}));
+  assert.ok(tree !== null, "打开后必须渲染弹窗");
+  assert.equal(tree.type, "dialog", "必须是原生 <dialog>");
+  tree.props.ref.current = element;
+
+  // 提交阶段：跑 effect → 必须进 top layer。
+  app.flushEffects();
+  assert.equal(calls.showModal, 1, "打开时必须真的调用 showModal()（否则被设置页压住）");
+  assert.equal(element.open, true, "showModal 后 dialog 应处于 open 状态");
+
+  // 关闭：跑清理函数 → 必须退出 top layer。
+  for (const cleanup of app.effectCleanups) cleanup();
+  assert.equal(calls.close, 1, "关闭时必须真的调用 close()（否则永久留在 top layer，页面一直被模态）");
+  assert.equal(element.open, false, "close 后 dialog 不得再处于 open 状态");
 });
 
 test("渲染：设置页面板首屏渲染出标题、工具条与加载态（不抛错）", () => {

@@ -754,10 +754,18 @@ test("官方 Modal 语义：焦点移入 / Esc 关闭 / Tab 循环 / busy 不关
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/(^|[^:])\/\/.*$/gm, "$1");
 
-  // (a) Esc 关闭 + repeat 不重复触发
-  assert.match(code, /event\.key === "Escape"/, "必须处理 Esc");
-  assert.match(code, /event\.repeat !== true/, "repeat 的 Esc 不得重复触发关闭");
-  assert.match(code, /allowRef\.current !== false/, "busy 时必须挡住 Esc（否则删除中界面被关掉）");
+  // (a) 【2026-10-18 迁移到原生 <dialog>】Esc 现在由浏览器的 `cancel` 事件负责，
+  //     不再自己拦 keydown —— 原生 dialog 的 Esc 语义就是 cancel，拦掉它即可
+  //     实现「busy 时不关」，且不会和浏览器的默认关闭打架。
+  assert.match(code, /addEventListener\("cancel"/, "必须处理原生 dialog 的 cancel（Esc 语义）");
+  assert.match(code, /event\.preventDefault\(\)[\s\S]{0,80}allowRef\.current !== false/, "busy 时必须挡住 cancel（否则删除中界面被关掉）");
+  // (a2) 进/出 top layer：showModal() 是置顶的唯一保证，close() 必须成对出现，
+  //      否则 dialog 留在 top layer 上，整个页面会被永久模态。
+  assert.match(code, /showModal\s*\(/, "必须调用 showModal() 进 top layer（否则被设置页压住）");
+  // 必须是**真的调用** `element.close()`，而不是仅仅出现 typeof 检查。
+  // （宽松的 /\.close\(/ 会被 `typeof element.close === "function"` 骗过 —— 变异 M4 就存活过。）
+  assert.match(code, /element\.close\s*\(\s*\)/, "关闭时必须真的调用 element.close() 退出 top layer");
+  assert.match(code, /element\.open !== true/, "showModal 必须幂等（重复调用会抛错）");
   // (b) 与宿主快捷键共存
   assert.match(code, /event\.ctrlKey === true \|\| event\.altKey === true \|\| event\.metaKey === true/, "带修饰键不得拦截（让宿主快捷键走）");
   // (c) Tab 焦点陷阱

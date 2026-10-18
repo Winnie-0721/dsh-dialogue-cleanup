@@ -54,7 +54,9 @@ const MUTANTS = [
   ["F3 主内容列丢掉 min-width:0", [".dscc-row-main { min-width: 0; flex: 1 1 auto;", ".dscc-row-main { flex: 1 1 auto;"]],
   ["F4 徽标丢掉自着色底", ["  background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 10%, transparent);\n  color: var(--dsw-alias-state-success-primary);", "  color: var(--dsw-alias-state-success-primary);"]],
   ["F5 弹窗丢掉 z-index", ["  position: fixed; inset: 0; z-index: 1000;", "  position: fixed; inset: 0;"]],
-  ["F6 Esc 不再挡 busy", ["if (event.repeat !== true && allowRef.current !== false) closeRef.current();", "if (event.repeat !== true) closeRef.current();"]],
+  // 【2026-10-18 迁移到原生 dialog】Esc 从 keydown 迁到 cancel 事件：
+  // 保留「busy 不关」这条不变量的变异，但对准新的实现位置。
+  ["F6 Esc 不再挡 busy（cancel 里丢掉 allowRef 判断）", ["          if (allowRef.current !== false) closeRef.current();", "          closeRef.current();"]],
   ["F7 卡片行描边退回 1px", ["  border: 0.5px solid var(--dsw-alias-settings-card-stroke); border-radius: var(--dsw-radius-xl);\n  background: var(--dsw-alias-settings-card-fill);\n}\n/* 官方卡片的悬停反馈就是这一条换底。 */", "  border: 1px solid var(--dsw-alias-border-l1); border-radius: var(--dsw-radius-xl);\n  background: var(--dsw-alias-settings-card-fill);\n}\n/* 官方卡片的悬停反馈就是这一条换底。 */"]],
   ["F8 徽标圆角退回 4px", ["  border-radius: 999px; corner-shape: round;", "  border-radius: 4px;"]],
   ["F9 徽标字重退回 400", ["  font-size: 11px; line-height: 17px; font-weight: 500;", "  font-size: 11px; line-height: 17px; font-weight: 400;"]],
@@ -62,7 +64,9 @@ const MUTANTS = [
   ["F11 徽标 outline 档描边退回 1px l2", [".dscc-badge-outline { border: 0.5px solid var(--dsw-alias-border-l4); }", ".dscc-badge-outline { border: 1px solid var(--dsw-alias-border-l2); }"]],
 
   // ── 官方 Modal 的键盘与焦点语义（第一轮建立，本轮换皮后必须仍然成立） ──
-  ["K1 不处理 Esc", ["if (event.key === \"Escape\" && event.shiftKey !== true) {", "if (false) {"]],
+  // 【2026-10-18 迁移到原生 dialog】Esc 交给浏览器的 cancel 事件：
+  // 「不处理 Esc」等价于不注册 cancel 监听。
+  ["K1 不处理 Esc（不注册 cancel 监听）", ["        element.addEventListener(\"cancel\", onCancel);\n", ""]],
   ["K2 丢掉焦点陷阱（Tab 可走出卡片）", ["if (event.key !== \"Tab\") return;", "if (true) return;"]],
   ["K3 丢掉关闭还焦", ["          const target =\n            previous && previous.isConnected === true\n              ? previous\n              : null;", "          const target = null;"]],
   ["K4 丢掉 data-modal-autofocus 初始焦点", ["            element.querySelector(\"[data-modal-autofocus]\")) ??", "            null) ??"]],
@@ -98,6 +102,14 @@ const MUTANTS = [
   // 否则搜索会给整个候选集折叠标题（真机 pageSize=5 的搜索仍 requested=25、冷缓存 1059 ms）。
   ["H8 搜索误用 titleLimit（预算随候选集膨胀）", ["      await ensureTitles(items, titleSearchLimit);", "      await ensureTitles(items);"], "service"],
   ["H9 搜索预算被设成无穷（整候选集都读标题）", ["    const titleSearchLimit = Number.isInteger(config.titleSearchLimit)\n      ? Math.max(config.titleSearchLimit, 0)\n      : 40;", "    const titleSearchLimit = Number.POSITIVE_INFINITY;"], "service"],
+
+  // ── 第四轮：弹窗必须进 top layer（用户实测「被设置页压住，要关设置才看得见」） ──
+  // 这一组的每条都必须让测试变红，否则「弹窗置顶」就只是口号。
+  ["M1 退回 div（脱离 showModal 后又被设置页压住）", ["        \"dialog\",\n        {", "        \"div\",\n        {"]],
+  ["M2 不调用 showModal（留在普通层叠上下文里）", ["        if (typeof element.showModal === \"function\" && element.open !== true) {", "        if (false) {"]],
+  ["M3 不幂等调用 showModal（重复打开抛 InvalidStateError）", ["        if (typeof element.showModal === \"function\" && element.open !== true) {", "        if (typeof element.showModal === \"function\") {"]],
+  ["M4 关闭时不 close（dialog 永久留在 top layer）", ["          if (typeof element.close === \"function\" && element.open === true) {", "          if (false) {"]],
+  ["M5 丢掉原生 cancel 拦截（busy 时 Esc 会关掉界面）", ["          event.preventDefault();\n          if (allowRef.current !== false) closeRef.current();", "          if (allowRef.current !== false) closeRef.current();"]],
 ];
 
 let killed = 0;

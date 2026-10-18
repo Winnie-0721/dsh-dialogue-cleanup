@@ -802,17 +802,46 @@ window.__ModuleLoader__.load({
 .dscc-panel-hidden { color: var(--dsw-alias-state-warn-primary); }
 
 /* ───────────── 弹窗：官方 Modal.module.css ─────────────
-   【为什么不是原生 dialog】官方 Modal 用的是 div + fixed + z-index:1000。
-   原生 <dialog> 的三个问题见 useModalLayer 注释：::backdrop 与遮罩叠加、
-   元素被宿主选择器意外匹配、以及无法实现「busy 时 Esc 不关」。
-   层级：root 是 fixed + inset:0 + z-index:1000，flex 居中，
-   上下内边距取 max(24px, 桌面框 overlay inset)。 */
+   【层级方案 · showModal() 进 top layer（2026-10-18 用户实测修复）】
+   旧方案是 div + position:fixed + z-index:1000，与官方 Modal 的写法一致。
+   **但它有个致命前提我们并不满足**：z-index 只在**同一个层叠上下文**内比较。
+   本插件渲染在宿主 shell.overlay 槽位里，该槽位的容器 .overlayLayer 是
+   position:absolute; z-index:20 —— 它自己就是一个层叠上下文。于是我们的
+   「z-index:1000「 只在这个容器内部有效，而容器整体只有 **20**，被设置页
+   （在另一个列容器里、层级更高）压住：用户实测「删除结果框要关掉设置界面才看得见」。
+   官方插件没暴露这个问题，是因为它们的 overlay 内容都是小提示，本来就不需要
+   越过设置页整页；而删除结果框必须盖在一切之上。
+
+   改用原生 <dialog> + showModal()：它把元素提升到**浏览器 top layer**，
+   这是规范的顶层，**与任何祖先的 layer/上下文无关**，因此必然盖住设置页。
+   额外好处：焦点陷阱、Esc 语义、背景 inert 都由浏览器免费提供。
+
+   原生 dialog 的三个旧问题，逐个解决（不再靠猜，写清做法）：
+     1. ::backdrop 与我们自己的遮罩叠加 → ::backdrop 显式置透明，
+        遮罩仍由 「.dscc-modal-mask「（官方 bg-mask-1 + mask-blur）负责；
+     2. 元素被宿主选择器意外匹配 → 我们用 data-dscc 命名空间，
+        且 dialog 只带我们的类名，不注册任何角色去撞官方选择器；
+     3. 「busy 时 Esc 不关」→ 浏览器默认的 cancel 事件**可以** preventDefault，
+        见 useModalLayer 里对 cancel 的拦截。 */
+
+/* 原生 dialog 的 UA 默认样式（margin:auto / border / padding / 背景）全部清掉，
+   只保留我们自己的一套；尺寸与居中照旧由 flex 决定。 */
 .dscc-modal {
   pointer-events: auto;
   position: fixed; inset: 0; z-index: 1000;
   display: flex; align-items: center; justify-content: center;
   padding: max(24px, var(--dsh-frame-overlay-top, 24px)) 24px;
+  /* dialog UA 重置：见上 */
+  margin: 0; width: 100%; height: 100%; max-width: none; max-height: none;
+  border: 0; background: transparent; color: inherit; font: inherit;
+  overflow: visible;
 }
+/* 关闭态不得占位：showModal() 之外的原生 dialog 是 display:none，
+   但我们的 [open] 由 effect 控制，这里显式声明「没有 open 就不渲染」，
+   避免极短的一帧里以静态块出现。 */
+.dscc-modal:not([open]) { display: none; }
+/* 背景遮罩：官方 bg-mask-1 由 CSS 变量给，::backdrop 不重复上色。 */
+.dscc-modal::backdrop { background: transparent; }
 /* 官方遮罩：absolute + backdrop-filter 模糊 + 一层 bg-mask-1 底色，
    入场淡入。上一版我用 color-mix(bg-base 45%) 自己凑 —— 现在有真令牌了。 */
 .dscc-modal-mask {
@@ -1372,6 +1401,25 @@ window.__ModuleLoader__.load({
         const doc = element.ownerDocument ?? document;
         const previous = doc.activeElement;
 
+        // 【置顶的关键】showModal() 把 <dialog> 提升到浏览器 top layer。
+        // 这是唯一能保证「盖住设置页」的机制：top layer 不受任何祖先层叠上下文影响，
+        // 也不参与 z-index 比较。idempotent 保护：已在 top layer 时不重复调用（会抛错）。
+        if (typeof element.showModal === "function" && element.open !== true) {
+          try {
+            element.showModal();
+          } catch {
+            /* 已被别的路径打开 / 已脱离文档：退化为普通显示，不阻断删除流程 */
+          }
+        }
+
+        // 原生 dialog 的 Esc 走 `cancel` 事件（不是 keydown）：在这里拦 busy。
+        // 拦掉后浏览器不会自己关闭，我们也就不关 —— 语义与旧实现逐字一致。
+        const onCancel = (event) => {
+          event.preventDefault();
+          if (allowRef.current !== false) closeRef.current();
+        };
+        element.addEventListener("cancel", onCancel);
+
         // 初始焦点：优先 data-modal-autofocus 标记，再退到第一个可聚焦元素。
         const initial =
           (typeof element.querySelector === "function" &&
@@ -1386,12 +1434,9 @@ window.__ModuleLoader__.load({
           // 与宿主快捷键共存：带修饰键的一律不拦。
           if (event.ctrlKey === true || event.altKey === true || event.metaKey === true) return;
           if (event.defaultPrevented === true) return;
-          if (event.key === "Escape" && event.shiftKey !== true) {
-            event.preventDefault();
-            // repeat 不重复触发：按住 Esc 只关一次。
-            if (event.repeat !== true && allowRef.current !== false) closeRef.current();
-            return;
-          }
+          // Esc 交给原生 dialog 的 cancel 事件（见上面的 onCancel），
+          // 这里只保留 Tab 的焦点循环：top layer 已经把背景惰化，
+          // 但循环仍在卡片内，避免焦点跑进 dialog 之外的宿主元素。
           if (event.key !== "Tab") return;
           // 菜单打开时 Tab 归菜单（官方同款）：本插件菜单不在卡片内，直接放行。
           const active = doc.activeElement;
@@ -1415,6 +1460,15 @@ window.__ModuleLoader__.load({
         doc.addEventListener("keydown", keydown);
         return () => {
           doc.removeEventListener("keydown", keydown);
+          element.removeEventListener("cancel", onCancel);
+          // 必须 close()：否则 dialog 留在 top layer 上，页面会一直「被模态」。
+          if (typeof element.close === "function" && element.open === true) {
+            try {
+              element.close();
+            } catch {
+              /* 已关闭 / 已脱离文档 */
+            }
+          }
           // 关闭后把焦点还给打开前的元素（官方同款：模态不该吞掉焦点）。
           const target =
             previous && previous.isConnected === true
@@ -1723,7 +1777,7 @@ window.__ModuleLoader__.load({
       const role = state.error !== null && state.result === null ? "alertdialog" : "dialog";
 
       return h(
-        "div",
+        "dialog",
         {
           ref: dialogRef,
           className: "dscc-modal",
