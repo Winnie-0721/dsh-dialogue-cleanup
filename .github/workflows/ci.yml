@@ -71,31 +71,38 @@ jobs:
             }
           '
 
-      - name: 递归跑 test/**/*.test.mjs 并断言测试条数 ≥ ${{ env.MIN_TESTS }}
-        # 【为什么不用 `npm test -- --test-reporter=tap`（实测纠正）】
-        # package.json 的 test 脚本是 `node --test "test/**/*.test.mjs"`，追加参数
-        # 只会落在**文件实参之后**；而 node 的 runner CLI 把 `--test` 之后的非选项
-        # 参数当测试文件，实参后面的 `--test-reporter=tap` **被静默忽略**（Node 24
-        # 实测：输出仍是 spec 的 `ℹ tests N`，没有 TAP 的 `# tests N`）。
-        # 于是 CI 的 `grep '^# tests'` 永远匹配不到 → 测试明明全绿，CI 却每次红
-        # （假红）。正确写法是把 reporter 旗标放在 `--test` **之前**，并且这里
-        # 直接使用与 package.json 完全相同的 glob 字符串 —— 断言条数就是在证明
-        # 这个 glob 被 node 正确展开。
+      - name: 跑全部测试并断言条数 ≥ ${{ env.MIN_TESTS }}
+        # ── 三个实测坑，都是远端 CI 抓出来的，写在这里防复发 ──────────────
+        #
+        # ①【不要 `npm test -- --test-reporter=tap`】追加参数落在文件实参之后，
+        #    node 的 runner CLI 把 `--test` 之后的非选项参数当测试文件，
+        #    实参后面的 `--test-reporter=tap` **被静默忽略**（实测输出仍是 spec 的
+        #    `ℹ tests N`，没有 TAP 的 `# tests N`）→ `grep '^# tests'` 永远匹配不到，
+        #    测试全绿而 CI 每次假红。reporter 旗标必须在 `--test` **之前**。
+        #
+        # ②【不要依赖 node 展开 glob】`node --test "test/**/*.test.mjs"` 在
+        #    **Node 20 上直接失败**：`Could not find '.../test/**/*.test.mjs'`
+        #    （glob 支持是 Node 22+ 才有）。实测 CI：node 22 绿、node 20 两个平台都红。
+        #    而 engines 声明 >=20，所以「声明的跑法」在最低支持版本上跑不起来。
+        #    → 统一走 scripts/run-tests.mjs（由 node 自己枚举文件），跨版本跨平台一致。
+        #
+        # ③【断言条数】枚举为空或条数骤降必须红，而不是「跑了 0 条还退出 0」。
         run: |
           set -o pipefail
           status=0
-          node --test-reporter=tap --test "test/**/*.test.mjs" | tee test-output.tap || status=$?
+          node scripts/run-tests.mjs --list
+          node scripts/run-tests.mjs --test-reporter=tap | tee test-output.tap || status=$?
 
           tests=$(grep -m1 -E '^# tests [0-9]+$' test-output.tap | awk '{ print $3 }')
           if [ -z "${tests}" ]; then
-            echo "::error::node --test 输出里没有 '# tests N' —— 测试根本没跑起来（glob 没展开？）"
+            echo "::error::node --test 输出里没有 '# tests N' —— 测试根本没跑起来"
             exit 1
           fi
           if [ "${tests}" -lt "${MIN_TESTS}" ]; then
-            echo "::error::只跑了 ${tests} 条测试，低于下限 ${MIN_TESTS} —— glob 很可能静默漏跑"
+            echo "::error::只跑了 ${tests} 条测试，低于下限 ${MIN_TESTS} —— 套件很可能漏跑"
             exit 1
           fi
-          echo "测试条数 ${tests} ≥ ${MIN_TESTS}：glob 确认生效，套件确实被递归收进来了"
+          echo "测试条数 ${tests} ≥ ${MIN_TESTS}：套件确认被完整收进来"
           exit "${status}"
 
       - name: 行尾守卫再单独跑一次（纯 LF 是打包一致性的前提）
