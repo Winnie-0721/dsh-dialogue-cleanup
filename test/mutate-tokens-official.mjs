@@ -117,7 +117,11 @@ const MUTANTS = [
   // 每条都必须让测试变红，否则「修好了」只是口号。
   ["N1 去掉真实路径校验（父组件 junction 可越界删除）", ["      if (!(await isRealPathInside(root, dir))) {", "      if (false) {"], "artifacts"],
   ["N2 readdir 错误重新被吞（磁盘失败又报成功）", ["    if (code === \"ENOENT\") {\n      rootPresent = false; // 根不存在：没有可删的东西，这是正常收尾\n    } else {\n      error = `${code ?? \"unknown\"}: ${String(cause?.message ?? cause)}`;\n    }", "    rootPresent = false;"], "artifacts"],
-  ["N3 rm 失败不再记录（静默跳过）", ["        failures.push(`${dir} :: ${cause?.code ?? \"unknown\"}: ${String(cause?.message ?? cause)}`);\n      }\n    }\n  }\n\n  return { count: removed.length, paths: removed, skipped, failures", "        void cause;\n      }\n    }\n  }\n\n  return { count: removed.length, paths: removed, skipped, failures"], "artifacts"],
+  // 【N3 的 find 串只锚定 rm 的 catch 块本身，不要跨越到函数尾部】
+  // 上一版把 `return { count: removed.length, paths: removed, skipped, failures … }`
+  // 一起写进 find，结果返回结构改成多行对象后 N3 直接 SKIP —— 变异退化成装饰品。
+  // CI 要求 survived=0 正是为了逼出这种「静默失效」，不要靠放宽 CI 去掩盖它。
+  ["N3 rm 失败不再记录（静默跳过）", ["      } catch (cause) {\n        failures.push(`${dir} :: ${cause?.code ?? \"unknown\"}: ${String(cause?.message ?? cause)}`);\n      }\n    }\n  }", "      } catch (cause) {\n        void cause;\n      }\n    }\n  }"], "artifacts"],
   ["N4 lstat 非 ENOENT 错误重新被吞", ["        if (cause?.code !== \"ENOENT\") {\n          failures.push(`${dir} :: lstat ${cause?.code ?? \"unknown\"}: ${String(cause?.message ?? cause)}`);\n        }\n        continue; // ENOENT 确实等于「不存在」——正常跳过", "        continue;"], "artifacts"],
   ["N5 对偶拼写守卫不查持久语料（误删另一个会话）", ["      if (persistedIds !== null && persistedIds !== undefined && persistedIds.has(id)) return true;\n", ""], "service"],
   ["N6 守卫不可用时仍然放行删除（宁可误删）", ["        const guardUsable = config.matchAlternateIdSpelling === true && persistedIds !== null;\n        const isKnownSession = guardUsable ? makeKnownSessionProbe(liveIds, persistedIds) : null;", "        const isKnownSession = makeKnownSessionProbe(liveIds, persistedIds);"], "service"],

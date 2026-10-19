@@ -1,0 +1,170 @@
+name: CI
+
+# 普通 CI：只做「语法检查 + 测试 + 行尾守卫」，**不接触任何发布凭据**。
+#
+# 为什么与发布工作流分开：
+#   · 发布走 OIDC 信任（见 publish-npm.yml），凭据面越窄越好；
+#   · 本文件只读仓库内容，permissions 只给 contents: read，
+#     不请求 OIDC、不读任何 npm 令牌、不写任何 registry 配置；
+#   · 这里也不会出现任何发布命令 —— 发布只有 publish-npm.yml 一个实现。
+#
+# 【本文件最重要的一步：断言测试条数】
+#   package.json / README 声明的运行方式是 `node --test "test/**/*.test.mjs"`。
+#   那层 glob 由 **node 自己**展开（shell 只负责把引号原样传过去）。一旦某一层
+#   把引号吃掉、或 node 版本不支持该 glob，实验证明会直接 **Could not find**，
+#   而「跑了 0 条还退出 0」这类静默漏跑也真实存在。所以 CI 解析 `# tests N`
+#   并要求 N ≥ MIN_TESTS，把「没跑」变成看得见的红，而不是绿着的假象。
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # 下限写在这里：新增测试只会让 N 变大，不会误报；调低它等于关掉这道闸门。
+  MIN_TESTS: "200"
+  # 今天仓库里有 10 个 test/*.test.mjs。低于这个数说明文件被删了或被忽略规则挡住。
+  MIN_TEST_FILES: "8"
+
+jobs:
+  test:
+    name: test (node ${{ matrix.node }} · ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # 一个平台失败不能让另一个平台的结论消失 —— 两边都要看到。
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: ['20', '22']
+    defaults:
+      run:
+        # 两个平台跑同一份步骤文本；windows-latest 自带 git bash。
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: 记录 node 版本（矩阵假设的可能来源）
+        run: node -v
+
+      - name: 语法检查（npm run check）
+        run: npm run check
+
+      - name: 列出本次会跑到的测试文件（glob 得先有东西可展开）
+        run: |
+          node -e '
+            const { readdirSync } = require("node:fs");
+            const files = readdirSync("test").filter((f) => f.endsWith(".test.mjs")).sort();
+            console.log(`test/*.test.mjs -> ${files.length} 个文件`);
+            for (const f of files) console.log(`  ${f}`);
+            const min = Number(process.env.MIN_TEST_FILES || 1);
+            if (files.length < min) {
+              console.error(`::error::只找到 ${files.length} 个测试文件，少于下限 ${min}`);
+              process.exit(1);
+            }
+          '
+
+      - name: 跑全部测试并断言条数 ≥ ${{ env.MIN_TESTS }}
+        # ── 三个实测坑，都是远端 CI 抓出来的，写在这里防复发 ──────────────
+        #
+        # ①【不要 `npm test -- --test-reporter=tap`】追加参数落在文件实参之后，
+        #    node 的 runner CLI 把 `--test` 之后的非选项参数当测试文件，
+        #    实参后面的 `--test-reporter=tap` **被静默忽略**（实测输出仍是 spec 的
+        #    `ℹ tests N`，没有 TAP 的 `# tests N`）→ `grep '^# tests'` 永远匹配不到，
+        #    测试全绿而 CI 每次假红。reporter 旗标必须在 `--test` **之前**。
+        #
+        # ②【不要依赖 node 展开 glob】`node --test "test/**/*.test.mjs"` 在
+        #    **Node 20 上直接失败**：`Could not find '.../test/**/*.test.mjs'`
+        #    （glob 支持是 Node 22+ 才有）。实测 CI：node 22 绿、node 20 两个平台都红。
+        #    而 engines 声明 >=20，所以「声明的跑法」在最低支持版本上跑不起来。
+        #    → 统一走 scripts/run-tests.mjs（由 node 自己枚举文件），跨版本跨平台一致。
+        #
+        # ③【断言条数】枚举为空或条数骤降必须红，而不是「跑了 0 条还退出 0」。
+        run: |
+          set -o pipefail
+          status=0
+          node scripts/run-tests.mjs --list
+          node scripts/run-tests.mjs --test-reporter=tap | tee test-output.tap || status=$?
+
+          tests=$(grep -m1 -E '^# tests [0-9]+$' test-output.tap | awk '{ print $3 }')
+          if [ -z "${tests}" ]; then
+            echo "::error::node --test 输出里没有 '# tests N' —— 测试根本没跑起来"
+            exit 1
+          fi
+          if [ "${tests}" -lt "${MIN_TESTS}" ]; then
+            echo "::error::只跑了 ${tests} 条测试，低于下限 ${MIN_TESTS} —— 套件很可能漏跑"
+            exit 1
+          fi
+          echo "测试条数 ${tests} ≥ ${MIN_TESTS}：套件确认被完整收进来"
+          exit "${status}"
+
+      - name: 行尾守卫再单独跑一次（纯 LF 是打包一致性的前提）
+        run: node --test test/eol.test.mjs
+
+      - name: 失败时留下 tap 日志
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-output-tap-node${{ matrix.node }}-${{ matrix.os }}
+          path: test-output.tap
+          if-no-files-found: ignore
+
+  mutation:
+    name: 变异测试（survived 必须为 0）
+    # 它要改源码再还原：慢，且会和同一个 checkout 上的并发改动打架，
+    # 所以只在 main 推送或手动触发时跑，不进 PR 的必经路径。
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 跑变异测试，并显式区分 killed 与 SKIP
+        run: |
+          set -o pipefail
+          status=0
+          node test/mutate-tokens-official.mjs | tee mutation.log || status=$?
+
+          # 【为什么不能只看退出码】脚本在「原文未命中」时打 SKIP，并把该条**计入
+          # survived**（见 test/mutate-tokens-official.mjs 的 !source.includes(find) 分支）。
+          # 也就是说：源码一旦改了写法，变异会悄无声息地退化成 SKIP，脚本仍然退出 0，
+          # 而断言其实一条都没咬到 —— 「绿着的装饰品」。所以这里必须要求 survived = 0。
+          summary=$(grep -E '^killed [0-9]+ / survived [0-9]+$' mutation.log | tail -1)
+          if [ -z "${summary}" ]; then
+            echo "::error::没读到 'killed N / survived M' 汇总行 —— 变异脚本没跑完"
+            exit 1
+          fi
+          killed=$(echo "${summary}" | awk '{ print $2 }')
+          survived=$(echo "${summary}" | awk '{ print $5 }')
+          echo "killed=${killed} survived=${survived}"
+
+          if [ "${survived}" -gt 0 ]; then
+            echo "::error::有 ${survived} 条变异存活（含 SKIP）—— 对应断言是装饰品，明细见 mutation.log"
+            grep -E '^(SKIP|SURVIVED)' mutation.log || true
+            exit 1
+          fi
+          if [ "${killed}" -lt 1 ]; then
+            echo "::error::killed=0：一条都没被杀掉，脚本本身可能失效"
+            exit 1
+          fi
+          exit "${status}"
+
+      - name: 失败时留下变异日志
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-log
+          path: mutation.log
+          if-no-files-found: ignore

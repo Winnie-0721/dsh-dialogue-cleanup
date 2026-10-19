@@ -483,11 +483,16 @@ if ($version -ne $current) {
   Ok "lib/ 与 client.js 的非注释行里没有写死的旧版本号 $current"
 }
 
-# 行为回归测试：【适配】本仓库用 test/**/*.test.mjs（那份用 verify/*.test.mjs）。
+# 行为回归测试：【适配】本仓库用 test/*.test.mjs（那份用 verify/*.test.mjs）。
+#
+# 【为什么不用 `node --test 'test/**/*.test.mjs'`】远端 CI 实测：Node 20 的
+# `node --test` **不展开 glob**，会直接报 Could not find。glob 是 Node 22+ 才有的，
+# 而 engines 声明 >=20。所以统一走 scripts/run-tests.mjs（由 node 自己枚举文件），
+# 三个版本、两个平台行为一致。发布门禁不能依赖「只在某些 Node 版本上成立」的跑法。
 $regressionTests = @(Get-ChildItem (Join-Path $root 'test') -Filter '*.test.mjs' -ErrorAction SilentlyContinue)
 if ($regressionTests.Count -eq 0) { throw 'test/ 下没有任何 *.test.mjs —— 回归测试缺失，发布不放行' }
-& $node --test 'test/**/*.test.mjs'
-if ($LASTEXITCODE -ne 0) { throw '回归测试未通过（node --test "test/**/*.test.mjs"）' }
+& $node (Join-Path $root 'scripts/run-tests.mjs')
+if ($LASTEXITCODE -ne 0) { throw '回归测试未通过（node scripts/run-tests.mjs）' }
 Ok ("回归测试通过：" + $regressionTests.Count + " 套（" + (($regressionTests | ForEach-Object { $_.Name }) -join '、') + "）")
 
 Push-Location $root

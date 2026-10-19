@@ -649,3 +649,295 @@ test("故障注入：rm 失败（目标不可删）→ 必须进 failures 而非
     await rm(base, { recursive: true, force: true }).catch(() => {});
   }
 });
+
+// ─────────────────────────────────────────────────────────────
+// 19. 【§4.1 竞态】安全检查后、实际文件删除前会话变为 running
+//
+//     这是任务书 §4.1.4 明确要求的那条确定性测试。宿主**没有**把写锁暴露给插件
+//     （SessionWriteLease 是内部模块，唯一外部表现是 resume 的 session/writer-held
+//     错误），所以拿不到原子互斥；能实现的最保守策略是「每个 rm 之前紧贴地再判一次」。
+//
+//     本用例精确构造「第一次检查通过 → 删除过程中变 running」，
+//     断言：**不会被静默当成普通 idle 会话删掉**。
+// ─────────────────────────────────────────────────────────────
+test("§4.1 竞态：删除前二次确认发现会话已 running → 拒绝删除且磁盘零改动", async () => {
+  // sessionController.list 第 1 次返回 idle（放行初次检查），此后返回 running。
+  let listCalls = 0;
+  const store = new Map([["race-1", { detach() { store.delete("race-1"); } }]]);
+  const env = await makeEnv({
+    services: {
+      sessions: { list: () => [{ id: "race-1" }], store },
+      sessionController: {
+        list: async () => {
+          listCalls += 1;
+          // 第 1 次（初次检查）idle；第 2 次起（删除前二次确认）running
+          const running = listCalls > 1;
+          return { items: [{ sessionId: "race-1", running, blank: false, updatedAt: 1 }] };
+        },
+      },
+    },
+  });
+  try {
+    await seedSession(env.root, "race-1", "projA");
+
+    const r = await env.service.deleteSession("race-1");
+    assert.equal(r.ok, true, "竞态拒绝不是 internal 失败");
+    // ★ 关键断言：目录必须还在
+    const survived = await stat(join(env.root, "projA", "race-1")).then(() => true).catch(() => false);
+    assert.equal(survived, true, "★ 检查后变 running 的会话绝不能删掉它的目录");
+    assert.equal(r.value.files, 0, "不得谎报删掉了文件");
+    // 必须可判别
+    assert.equal(r.value.partial, true, "必须报 partial");
+    assert.equal(r.value.complete, false, "绝不能报完整成功");
+    assert.ok(
+      r.value.degradations.some((d) => d.step === "preDeleteRecheck"),
+      `必须明确标出 preDeleteRecheck 降级，实际：${JSON.stringify(r.value.degradations.map((d) => d.step))}`,
+    );
+    assert.ok(listCalls >= 2, "二次确认真的又探测了一次（否则策略没生效）");
+  } finally {
+    await env.restore();
+  }
+});
+
+// 反方向：全程 idle → 不得误报 preDeleteRecheck 降级
+test("§4.1 反向断言：全程 idle → 正常删除且不得误报 preDeleteRecheck", async () => {
+  const store = new Map([["race-ok", { detach() { store.delete("race-ok"); } }]]);
+  const env = await makeEnv({
+    services: {
+      sessions: { list: () => [{ id: "race-ok" }], store },
+      sessionController: {
+        list: async () => ({ items: [{ sessionId: "race-ok", running: false, blank: false, updatedAt: 1 }] }),
+      },
+    },
+  });
+  try {
+    await seedSession(env.root, "race-ok", "projA");
+    const r = await env.service.deleteSession("race-ok");
+    assert.equal(r.value.files, 1, "idle 会话应被正常删除");
+    assert.equal(r.value.complete, true, "不得误报降级");
+    assert.ok(
+      !r.value.degradations.some((d) => d.step === "preDeleteRecheck"),
+      "全程 idle 不得报 preDeleteRecheck",
+    );
+  } finally {
+    await env.restore();
+  }
+});
+
+// ─────────────────────────────────────────────────────────────
+// 20. 【§4.2】sessions.list() 失败不得静默
+//     区分：服务缺失（能力缺失，不算失败）/ 抛错 / 返回非数组 / 正常空数组
+// ─────────────────────────────────────────────────────────────
+test("§4.2 sessions.list() 抛错/返回非数组 → 必须进 degradations（不得静默）", async () => {
+  for (const [label, impl] of [
+    ["抛错", () => { throw new Error("list boom"); }],
+    ["返回非数组", () => ({ not: "an array" })],
+  ]) {
+    const store = new Map([["rl-1", { detach() { store.delete("rl-1"); } }]]);
+    const env = await makeEnv({
+      services: { sessions: { list: impl, store } },
+    });
+    try {
+      await seedSession(env.root, "rl-1", "projA");
+      const r = await env.service.deleteSession("rl-1");
+      assert.ok(
+        r.value.degradations.some((d) => d.step === "readLiveIds"),
+        `${label}：必须报 readLiveIds 降级，实际 ${JSON.stringify(r.value.degradations.map((d) => d.step))}`,
+      );
+      assert.equal(r.value.complete, false, `${label}：有降级就不能 complete`);
+    } finally {
+      await env.restore();
+    }
+  }
+});
+
+test("§4.2 反向断言：sessions 服务缺失（能力缺失）/ 正常空数组 → 不得误报 readLiveIds", async () => {
+  // (a) 服务缺失
+  {
+    const env = await makeEnv({ services: { sessions: undefined } });
+    try {
+      await seedSession(env.root, "rl-2", "projA");
+      const r = await env.service.deleteSession("rl-2");
+      assert.ok(
+        !r.value.degradations.some((d) => d.step === "readLiveIds"),
+        "服务缺失是能力缺失，不是失败，不得报 readLiveIds",
+      );
+    } finally {
+      await env.restore();
+    }
+  }
+  // (b) 正常空数组（空结果 ≠ 读取失败）
+  {
+    const env = await makeEnv({ services: { sessions: { list: () => [], store: new Map() } } });
+    try {
+      await seedSession(env.root, "rl-3", "projA");
+      const r = await env.service.deleteSession("rl-3");
+      assert.ok(
+        !r.value.degradations.some((d) => d.step === "readLiveIds"),
+        "空数组是正常结果，不得报 readLiveIds",
+      );
+    } finally {
+      await env.restore();
+    }
+  }
+});
+
+test("§4.2 sessionQuery.listSessions() 抛错 → 守卫收紧 + 必须报 readPersistedIds", async () => {
+  const UUID = "33333333-4444-5555-6666-777777777777";
+  const store = new Map([[UUID, { detach() { store.delete(UUID); } }]]);
+  const env = await makeEnv({
+    services: {
+      sessions: { list: () => [{ id: UUID }], store },
+      sessionController: {
+        list: async () => ({ items: [{ sessionId: UUID, running: false, blank: false, updatedAt: 1 }] }),
+      },
+      sessionQuery: { listSessions: async () => { throw new Error("corpus down"); } },
+    },
+  });
+  try {
+    await seedSession(env.root, UUID, "projA");
+    await seedSession(env.root, `session-${UUID}`, "projB");
+
+    const r = await env.service.deleteSession(UUID);
+    // 安全行为：守卫收紧 → 不碰对偶拼写
+    const sibling = await stat(join(env.root, "projB", `session-${UUID}`)).then(() => true).catch(() => false);
+    assert.equal(sibling, true, "守卫不可用时必须收紧：不碰对偶拼写");
+    // 可观测行为：必须说明原因（原来是静默的）
+    assert.ok(
+      r.value.degradations.some((d) => d.step === "readPersistedIds"),
+      `必须报 readPersistedIds 降级，实际 ${JSON.stringify(r.value.degradations.map((d) => d.step))}`,
+    );
+    assert.equal(r.value.complete, false);
+  } finally {
+    await env.restore();
+  }
+});
+
+test("§4.2 sessionQuery.listSessions() 返回非数组 → 同样收紧且可观测", async () => {
+  const UUID = "44444444-5555-6666-7777-888888888888";
+  const store = new Map([[UUID, { detach() { store.delete(UUID); } }]]);
+  const env = await makeEnv({
+    services: {
+      sessions: { list: () => [{ id: UUID }], store },
+      sessionController: {
+        list: async () => ({ items: [{ sessionId: UUID, running: false, blank: false, updatedAt: 1 }] }),
+      },
+      sessionQuery: { listSessions: async () => "not-an-array" },
+    },
+  });
+  try {
+    await seedSession(env.root, UUID, "projA");
+    await seedSession(env.root, `session-${UUID}`, "projB");
+    const r = await env.service.deleteSession(UUID);
+    const sibling = await stat(join(env.root, "projB", `session-${UUID}`)).then(() => true).catch(() => false);
+    assert.equal(sibling, true, "非法返回类型下守卫也必须收紧");
+    assert.ok(r.value.degradations.some((d) => d.step === "readPersistedIds"));
+  } finally {
+    await env.restore();
+  }
+});
+
+// ─────────────────────────────────────────────────────────────
+// 21. 【§4.3】项目目录是链接被跳过时，结果中必须明确体现（不得静默）
+//     任务书原话：「不得把跳过了潜在数据报告为完整成功」。
+// ─────────────────────────────────────────────────────────────
+test("§4.3 项目目录是符号链接 → 安全跳过，且必须进 skippedDetails + degradations", async () => {
+  const env = await makeEnv();
+  try {
+    const outside = join(env.base, "OUTSIDE-LINK");
+    await mkdir(join(outside, "link-1"), { recursive: true });
+    await mkdir(env.root, { recursive: true });
+
+    // Windows 用 junction，POSIX 用目录符号链接 —— 两边 readdir 都报「非目录」
+    if (process.platform === "win32") {
+      const { execFileSync } = await import("node:child_process");
+      execFileSync("cmd", ["/c", "mklink", "/J", join(env.root, "proj-link"), outside], { stdio: "pipe" });
+    } else {
+      const { symlink } = await import("node:fs/promises");
+      await symlink(outside, join(env.root, "proj-link"), "dir");
+    }
+
+    const r = await env.service.deleteSession("link-1");
+    // 安全：外部数据不动
+    const survived = await stat(join(outside, "link-1")).then(() => true).catch(() => false);
+    assert.equal(survived, true, "链接指向的外部数据绝不能被删");
+    // 可观测：必须说明「跳过了链接」，不能静默报完整成功
+    assert.ok(
+      r.value.skippedDetails.some((d) => d.reason === "project-dir-is-link"),
+      `必须记录 project-dir-is-link，实际：${JSON.stringify(r.value.skippedDetails)}`,
+    );
+    assert.ok(
+      r.value.degradations.some((d) => d.step === "artifacts"),
+      "跳过了潜在数据 → 必须降级，不得 complete",
+    );
+    assert.equal(r.value.complete, false, "跳过链接不得报完整成功");
+  } finally {
+    await env.restore();
+  }
+});
+
+// ─────────────────────────────────────────────────────────────
+// 22. 【§4.4】单条与批量语义一致：complete/partial/noop 可区分
+// ─────────────────────────────────────────────────────────────
+test("§4.4 语义：正常删除 complete / 重删 noop / 运行中 refused 三者可区分", async () => {
+  const store = new Map([["sem-1", { detach() { store.delete("sem-1"); } }]]);
+  const env = await makeEnv({
+    services: {
+      sessions: { list: () => [{ id: "sem-1" }], store },
+      sessionController: {
+        list: async () => ({ items: [{ sessionId: "sem-1", running: false, blank: false, updatedAt: 1 }] }),
+      },
+    },
+  });
+  try {
+    await seedSession(env.root, "sem-1", "projA");
+
+    // 1) 正常删除 → complete
+    const first = await env.service.deleteSession("sem-1");
+    assert.equal(first.value.complete, true, "正常删除必须 complete");
+    assert.equal(first.value.partial, false);
+
+    // 2) 重删 → noop（不是错误，也不是 complete-with-files）
+    const second = await env.service.deleteSession("sem-1");
+    assert.equal(second.ok, true, "重删是幂等成功");
+    assert.equal(second.value.nothingDeleted, true, "重删必须标 noop");
+
+    // 3) 运行中 → refused（第三种语义）
+    const store2 = new Map([["sem-2", { detach() { store2.delete("sem-2"); } }]]);
+    const env2 = await makeEnv({
+      services: {
+        sessions: { list: () => [{ id: "sem-2" }], store: store2 },
+        sessionController: {
+          list: async () => ({ items: [{ sessionId: "sem-2", running: true, blank: false, updatedAt: 1 }] }),
+        },
+      },
+    });
+    try {
+      await seedSession(env2.root, "sem-2", "projA");
+      const third = await env2.service.deleteSession("sem-2");
+      assert.equal(third.ok, false, "运行中必须拒绝");
+      assert.equal(third.error.code, "refused");
+      // 三种语义必须互不相同（用各自的判别字段，不要拿两个同值布尔硬比）
+      assert.equal(first.ok, true, "正常删除：ok");
+      assert.equal(first.value.nothingDeleted, false, "正常删除：删掉了东西 → 不是 noop");
+      assert.equal(first.value.files, 1, "正常删除：确实删了 1 个");
+
+      assert.equal(second.ok, true, "重删：ok（幂等）");
+      assert.equal(second.value.nothingDeleted, true, "重删：noop");
+      assert.equal(second.value.files, 0, "重删：没删到东西");
+
+      assert.equal(third.ok, false, "运行中：refused（与上面两种都不是一类）");
+      assert.equal(third.error.code, "refused");
+      // 三个判别键两两可区分
+      const sig = (r) => (r.ok === false ? "refused" : r.value.nothingDeleted ? "noop" : "deleted");
+      assert.equal(sig(first), "deleted", "正常删除判为 deleted");
+      assert.equal(sig(second), "noop", "重删判为 noop");
+      assert.equal(sig(third), "refused", "运行中判为 refused");
+      assert.equal(new Set([sig(first), sig(second), sig(third)]).size, 3, "三种语义必须两两可区分");
+    } finally {
+      await env2.restore();
+    }
+  } finally {
+    await env.restore();
+  }
+});

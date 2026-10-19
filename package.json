@@ -39,7 +39,8 @@
     "node": ">=20.0.0"
   },
   "scripts": {
-    "test": "node --test \"test/**/*.test.mjs\"",
+    "test": "node scripts/run-tests.mjs",
+    "test:list": "node scripts/run-tests.mjs --list",
     "check": "node --check lib/index.js && node --check lib/config.js && node --check lib/artifacts.js && node --check lib/audit.js && node --check lib/service.js && node --check lib/http.js && node --check client.js"
   },
   "dsh": {

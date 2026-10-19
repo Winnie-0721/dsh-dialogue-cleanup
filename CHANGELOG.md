@@ -1,6 +1,130 @@
 # 变更记录
 
-## 未发布
+## 1.1.1
+
+### 收尾整改：CI 补齐、审计治理、删除竞态与「未知状态」处理
+
+上一版（1.1.0，2026-10-16）**不含** 10-18 的删除安全修复；本版把它们与后续
+收尾整改一起发出。完整证据见 [docs/整改报告-稳定性与安全性.md](docs/整改报告-稳定性与安全性.md)
+与 [docs/删除安全残留分析.md](docs/删除安全残留分析.md)。
+
+#### P0 · 新增常规 CI（.github/workflows/ci.yml）
+
+此前仓库只有标签/Release 触发的发布工作流，**push 到 main 与 PR 都不会跑测试**。
+新增独立 `ci.yml`：push→main、PR→main、workflow_dispatch 三触发；矩阵 node 20/22 ×
+ubuntu/windows；权限只有 `contents: read`，**不接触任何发布凭据**。
+
+关键一步是**断言测试条数**：`node --test-reporter=tap --test "test/**/*.test.mjs"`
+解析 `# tests N` 并要求 N ≥ 200。理由是那层 glob 由 node 自己展开，一旦某层吃掉引号
+就会「跑了 0 条还退出 0」——绿着的假象。变异测试独立成 job，并要求
+`survived === 0`（脚本在原文未命中时会打 SKIP 并计入 survived，只看退出码会漏掉
+「断言退化成装饰品」）。
+
+> 实测踩坑并已修正：写成 `npm test -- --test-reporter=tap` 时，参数落在文件实参之后
+> 会被 node **静默忽略**（输出仍是 `ℹ tests N`，没有 `# tests N`），CI 会永远匹配不到
+> 而**每次假红**。必须把 reporter 旗标放在 `--test` 之前。
+
+**首次远端运行还抓到两个更严重的问题（本地 Windows/Node 24 都测不出来）：**
+
+1. **Node 20 的 `node --test` 不支持 glob**：`Could not find '.../test/**/*.test.mjs'`。
+   glob 展开是 Node 22+ 才有的，而 `engines.node` 声明 `>=20.0.0` —— 也就是
+   「文档里写的跑法」在最低支持版本上**根本跑不起来**。`package.json`、`release.ps1`、
+   `ci.yml` 三处都用了它，现已统一到新增的 `scripts/run-tests.mjs`
+   （由 Node 自己枚举文件再传给 `node --test`），三个版本、两个平台行为一致。
+2. **`isInside` 测试硬编码 Windows 路径**：`not ok 236`。POSIX 上 `path.resolve()`
+   把反斜杠当普通文件名字符，`C:\tmp\sessions` 变成无分隔符的单段路径，断言必失败。
+   这不是 `isInside` 的 bug，是测试的平台假设错误；已改为按 `process.platform` 取路径。
+
+修复后 CI **四个组合（node 20/22 × ubuntu/windows）全绿**，
+日志确证每个组合都跑了 13 个文件 / 238 条测试并通过 `≥200` 断言（不是空转）。
+
+#### P0 · 运行态检查与磁盘删除之间的竞态（公开 API 下的最保守策略）
+
+**调查结论（实测，非推测）**：DSH 确实有内核级会话写锁 ——
+`SessionWriteLease.acquire`，Windows 用命名信号量
+`Local\dsh-session-lock-<sha256(realpath)>`，POSIX 用 fd 锁，占用时抛
+`SessionAlreadyOwnedError`。但它**不对插件暴露**：`SessionWriteLease` 是内部模块
+（无 export 块、无 `ctx.*` 挂载），唯一对外表现是 resume 被占用时返回
+`session/writer-held` 错误 —— 那是错误码，不是可调用的锁。
+
+因此**不声称竞态已消除**。采取能实现的最保守策略：在**每个 `rm` 之前**紧贴地再判一次
+运行态（`beforeDelete` 回调），把「检查→删除」窗口从整个事务压到「单次探测→rm」；
+二次确认失败或判为 running 时**拒绝删除**并如实进降级清单
+（`step: "preDeleteRecheck"`）。批量仍复用一次快照做**早期拒绝**，但删除前的最后一道
+判定**故意每次都取新鲜快照**，不用过期快照做破坏性决策。
+
+残余风险如实记录：窗口被压到单条语句级，但**不为零**；彻底消除需要宿主把
+`SessionWriteLease.acquire` 挂到公开服务上（已作为上游建议写入残留分析文档）。
+
+#### P1 · 会话身份查询失败不再静默
+
+`sessions.list()` 抛错 / 返回非数组 / 服务缺失，原来被同一个 `catch` 压成
+`liveIdsKnown=false`，用户看到的是 `complete:true`。现在区分三类：
+**服务缺失 = 能力缺失（不算失败，不制造噪音）**；**抛错/非法类型 = 真失败**
+（进 `degradations`，step `readLiveIds`）；**空数组 = 正常结果**，与读取失败严格分开。
+
+`sessionQuery.listSessions()` 失败原本已 fail-closed（不碰对偶拼写，方向正确），
+但静默；现在同样进降级（step `readPersistedIds`）并说明「守卫已收紧」。
+
+#### P1 · 项目目录链接不再静默跳过
+
+Windows 上 `readdir` 对任何重解析点（`mklink /J`、`/D`、文件符号链接）都报
+`isDirectory:false`。跳过它**方向是对的**（不跟进链接 → 不越界删除），但原来既不进
+`skipped` 也不进 `failures` —— 若会话数据只在链接指向处，删除会报 `complete:true`
+而数据没删。现在记入结构化 `skippedDetails`（`reason: "project-dir-is-link"`）
+并进降级清单。`skipped` 仍保留字符串数组以兼容既有契约。
+
+#### P1 · 批量删除语义可判别 + 精确重试清单
+
+- **重复 id 去重**：原来 `["a","a"]` 会报 `total:2/ok:2`（第二次其实是 no-op），
+  污染统计。现在 `requested` / `duplicates` / `total` 三者分开。
+- **逐条 `outcome`**：`deleted` / `noop` / `refused` / `blocked` / `failed`，
+  并带 `retryable`，调用方能判「这一条该不该重试」。
+- **`retry` 清单**：只含失败或降级的条目，不重跑已完整成功的条目。
+- **`allComplete`**：整批全绿才为 true；任一子项有降级即 false。
+
+#### P1 · 审计日志治理（字段最小化 + 轮转）
+
+现网实测旧实现 **38 行 33.8 KB ≈ 910 B/行**：把整份 `result.runtime`、完整标题、
+全部 `removedPaths` 都塞进了一行 —— 那不是留痕，是备份删除结果。
+现在只写诊断必需字段（时间/操作/actor/phase/sessionId/结果码/计数/耗时/降级步骤），
+**实测降到 196 B/行（约 4.6× 缩小）**，并对每个文本字段做定长截断（240 字符）兜底。
+
+新增按文件大小轮转：`auditMaxBytes`（默认 4 MiB，0 = 不轮转）与
+`auditRotateKeep`（默认 3 份）。轮转不覆盖/不截断正在写入的日志（rename 搬走整份），
+并发追加安全；轮转失败返回可诊断降级（`rotated` / `rotateError`）且**不阻断写入**、
+**不让删除事务失败**。审计路径经 `normalize` + 越界校验，必须落在 `<DSH_HOME>` 内；
+越界配置**拒绝写入并如实上报**，不静默改写到别处。
+
+审计失败与删除结果是**两件不同的事实**：`audit.ok=false` 只进降级清单，
+绝不把已执行的删除伪报成回滚。
+
+#### 测试
+
+新增三个套件：
+- `test/audit.test.mjs`（14 条）：正常写入、字段最小化、截断、连续追加、超阈值轮转、
+  轮转不截断正在写的日志、轮转失败、路径是目录、50 条并发、路径不可写、路径越界、
+  禁用、配置边界与非法值回退。
+- `test/batch-semantics.test.mjs`（5 条）：全成功 / 去重 / deleted-refused-noop 三态 /
+  降级条目可重试 / 非法 id 不重试。
+- `test/isolated-integration.test.mjs`（4 条）：完整副作用清理、running 零改动、
+  **真实子进程 SIGKILL 中途中断后重启重跑**（不误删其他会话）、批量部分成功后重试。
+
+`fault-injection.test.mjs` 扩充到 27 条，新增 §4.1 竞态（检查后变 running 必须拒绝）、
+§4.2 查询失败可观测（含反向断言：服务缺失/空数组不得误报）、§4.3 链接跳过可观测。
+
+变异测试 **71/71 killed、survived 0**。全套 **238 条测试**（235 pass / 0 fail / 3 平台跳过）。
+
+#### 如实记录的未完成项
+
+- 真实宿主上的**破坏性**集成测试未做（会删用户真实会话）——破坏性路径只在隔离临时
+  `DSH_HOME` 上验证；真实 DSH 只有**只读**检查（`test/integration-real.mjs`）。
+- **Linux 实机未验证**：CI 矩阵已配置 ubuntu + windows，但首次远端运行结果需看
+  Actions（本地只能验证 Windows）。
+- 状态检查与 `rm` 之间的微窗口仍存在（见上）。
+- `removeProjectionCache` 的 `rootPresent` 恒为 `true`（按精确文件名删除，不列举 root）。
+
+---
 
 ### 稳定性与安全性整改：删除事务的状态一致性、路径越界与静默失败
 
