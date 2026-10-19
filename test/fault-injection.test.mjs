@@ -351,8 +351,18 @@ test("安全红线：项目目录是 junction 指向 root 之外 → 绝不删�
 //      字符串校验通过、lstat 说「普通目录」，若不查真实路径就会删掉外部目录
 //      （实测修复前 count:201、error:null，外部文件被删）。
 // ─────────────────────────────────────────────────────────────
-test("安全红线（竞态）：删除过程中项目目录被换成 junction → 必须拒绝且外部文件存活", async () => {
-  if (process.platform !== "win32") return; // junction 是 Windows 场景；POSIX 等价路径见单元测试
+test("安全红线（竞态）：删除过程中项目目录被换成链接 → 必须拒绝且外部文件存活", async () => {
+  // 【为什么这条必须跨平台跑 —— 远端 CI 抓到的真实覆盖缺口】
+  // 这个用例是唯一**真正驱动** isRealPathInside 的路径：readdir 先拿到全部 Dirent，
+  // 之后循环逐个 lstat+rm；在循环进行中把受害目录换成链接，字符串校验（isInside）
+  // 仍通过、lstat 跟随父组件后报「普通目录」——只有真实路径校验能拦住。
+  //
+  // 原本这里写着 `if (process.platform !== "win32") return;`，理由是「junction 是
+  // Windows 场景」。后果：Linux 上**没有任何测试**能咬住「移除 isRealPathInside」
+  // 这个变异 —— main push 的变异 job 当场报 `SURVIVED N1`，而 PR 上该 job 是 skipped，
+  // 所以本地和 PR 都看不出来。这不是等价变异，是**真实的测试覆盖缺口**。
+  // POSIX 用目录符号链接，语义等价（readdir 同样报 isDirectory:false）。
+  const isWin = process.platform === "win32";
   const { removeArtifacts } = await import("../lib/artifacts.js");
   const base = await mkdtemp(join(tmpdir(), "dscc-race-"));
   try {
@@ -369,6 +379,18 @@ test("安全红线（竞态）：删除过程中项目目录被换成 junction �
     }
     await mkdir(join(root, VICTIM, ID), { recursive: true });
 
+    /** 把受害目录换成指向 root 之外的链接（Windows: junction；POSIX: dir symlink）。 */
+    const swapToLink = async () => {
+      await rm(join(root, VICTIM), { recursive: true, force: true }).catch(() => {});
+      if (isWin) {
+        const { execFileSync } = await import("node:child_process");
+        execFileSync("cmd", ["/c", "mklink", "/J", join(root, VICTIM), outside], { stdio: "pipe" });
+      } else {
+        const { symlink } = await import("node:fs/promises");
+        await symlink(outside, join(root, VICTIM), "dir");
+      }
+    };
+
     const exists = (p) => stat(p).then(() => true).catch(() => false);
     const pending = removeArtifacts(ID, { root });
 
@@ -376,10 +398,8 @@ test("安全红线（竞态）：删除过程中项目目录被换成 junction �
     const watcher = (async () => {
       for (let i = 0; i < 200000 && !swapped; i += 1) {
         if (!(await exists(join(root, "p000", ID)))) {
-          await rm(join(root, VICTIM), { recursive: true, force: true }).catch(() => {});
           try {
-            const { execFileSync } = await import("node:child_process");
-            execFileSync("cmd", ["/c", "mklink", "/J", join(root, VICTIM), outside], { stdio: "pipe" });
+            await swapToLink();
             swapped = true;
           } catch { /* 继续尝试 */ }
         }
@@ -397,6 +417,54 @@ test("安全红线（竞态）：删除过程中项目目录被换成 junction �
         "拒绝越界删除时必须如实上报（error/failures）",
       );
     }
+  } finally {
+    await rm(base, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+// ─────────────────────────────────────────────────────────────
+// 11c. 【跨平台 · 直接驱动 isRealPathInside】
+//      上面那条竞态用例依赖「换链接的时机恰好落在循环中间」，偶发性上不保证一定命中。
+//      这里再补一条**确定性**的：让项目目录在 readdir 之后、rm 之前**必然**是链接，
+//      做法是项目目录本身就是链接、但让它通过 readdir 的 isDirectory 检查。
+//      POSIX 上 `readdir` 对 symlink-to-dir 报 isDirectory:false（与 Windows junction
+//      一致），所以真正可靠的做法是直接对 removeArtifactsWithFs 注入一个
+//      「readdir 报告为普通目录、但真实路径在 root 之外」的场景 —— 那正是
+//      isRealPathInside 唯一存在的理由。这条用例在**任何平台**都会咬住 N1。
+// ─────────────────────────────────────────────────────────────
+test("安全红线（确定性 · 跨平台）：readdir 说它是目录、真实路径却在 root 外 → 必须拒绝", async () => {
+  const { removeArtifactsWithFs } = await import("../lib/artifacts.js");
+  const base = await mkdtemp(join(tmpdir(), "dscc-realpath-"));
+  try {
+    const root = join(base, "sessions");
+    const outside = join(base, "OUTSIDE");
+    const ID = "s1";
+    // 外部真实数据
+    await mkdir(join(outside, ID), { recursive: true });
+    await writeFile(join(outside, ID, "valuable.txt"), "KEEP ME");
+    await mkdir(root, { recursive: true });
+    // 项目目录用符号链接指向外部（真实路径在 root 之外）
+    const { symlink } = await import("node:fs/promises");
+    const projLink = join(root, "proj-link");
+    await symlink(outside, projLink, "dir");
+
+    // 注入一个 readdir：谎称 proj-link 是普通目录（模拟「父组件在枚举后被换成链接」，
+    // 以及 Windows 上 junction 的各种时序变体）。lstat/rm 用真实实现。
+    const out = await removeArtifactsWithFs(ID, { root }, {
+      readdir: async () => [
+        { name: "proj-link", isDirectory: () => true, isSymbolicLink: () => false },
+      ],
+    });
+
+    // ★ 核心断言：真实路径在 root 之外 → 绝不能删
+    const survived = await stat(join(outside, ID, "valuable.txt")).then(() => true).catch(() => false);
+    assert.equal(survived, true, "真实路径在 root 之外时，外部数据绝不能被删");
+    assert.equal(out.count, 0, "越界目标不得计入已删数量");
+    assert.ok(out.failures.length > 0, "拒绝越界删除必须如实进 failures");
+    assert.ok(
+      out.skippedDetails.some((d) => d.reason === "realpath-escapes-root"),
+      `必须记录 realpath-escapes-root，实际：${JSON.stringify(out.skippedDetails)}`,
+    );
   } finally {
     await rm(base, { recursive: true, force: true }).catch(() => {});
   }
