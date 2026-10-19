@@ -113,7 +113,12 @@ Windows 上 `readdir` 对任何重解析点（`mklink /J`、`/D`、文件符号�
 `fault-injection.test.mjs` 扩充到 27 条，新增 §4.1 竞态（检查后变 running 必须拒绝）、
 §4.2 查询失败可观测（含反向断言：服务缺失/空数组不得误报）、§4.3 链接跳过可观测。
 
-变异测试 **71/71 killed、survived 0**。全套 **238 条测试**（235 pass / 0 fail / 3 平台跳过）。
+变异测试 **71/71 killed、survived 0**（**main push 远端已验证**，run 39206316730）。
+全套 **239 条测试**（Windows：236 pass / 0 fail / 3 平台跳过；Linux：239 pass / 0 skip）。
+
+> 变异 job 在合并后**先红过一次**：`a9698d8` 报 `SURVIVED N1`（`killed 70 / survived 1`）。
+> 根因是 N1 的两个杀手测试都是 Windows-only，Linux 上无人咬。已补跨平台用例修复
+> （PR #2 / `8cd9618`），复跑为 71/71。
 
 #### 如实记录的未完成项
 
