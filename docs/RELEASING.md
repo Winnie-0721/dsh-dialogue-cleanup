@@ -183,9 +183,15 @@ gh workflow run pack-release.yml --repo Winnie-0721/dsh-dialogue-cleanup --ref m
 ## 7. 发版前跑一遍
 
 ```powershell
-pwsh -File scripts\release.ps1 -LocalOnly      # 全套门禁（含 156 条测试）
+pwsh -File scripts\release.ps1 -LocalOnly      # 全套门禁（含 238 条测试）
 node test/release-workflow.test.mjs            # 只跑发布工作流回归
+node test/mutate-tokens-official.mjs           # 变异测试：必须 survived 0
 ```
+
+> 常规 CI（`.github/workflows/ci.yml`）会在 **push 到 main 与 PR** 时自动跑
+> 语法检查 + 全套测试 + 行尾守卫，并**断言测试条数 ≥ 200**（防止 glob 静默漏跑）。
+> 变异测试在 CI 里是独立 job，要求 `survived === 0` —— 脚本在原文未命中时会打
+> `SKIP` 并把它计入 survived，只看退出码会漏掉「断言退化成装饰品」。
 
 ## 8. 发布之后：改动什么时候生效
 

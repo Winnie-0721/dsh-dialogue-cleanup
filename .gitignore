@@ -21,5 +21,13 @@ _*.mjs
 _*.txt
 _push-api.mjs
 
+# 测试/变异运行的中间输出。CI 里用 upload-artifact 留存，不进仓库。
+# （踩过：一次 `node --test > tapC.txt` 的日志被误提交，1438 行且是 CRLF，
+#   既污染仓库又会触发行尾守卫。这里把常见形态一次性忽略掉。）
+test-output.tap
+*.tap
+tap*.txt
+mutation.log
+
 # 截图脚本的中间产物（PNG 才入库）
 docs/assets/*.html

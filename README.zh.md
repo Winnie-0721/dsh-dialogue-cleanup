@@ -107,7 +107,47 @@ dsh plugin --profile web add dsh-dialogue-cleanup
 3. **清理工作区记录** —— 只统计真正摘掉的那些工作区。
 4. **清注册表残留** —— pin / archive 记录，走公开的幂等 API。
 5. **删除磁盘工件** —— `<DSH_HOME>/sessions/<project>/<sessionId>`，外加派生的投影缓存。
+   **每个目录真正 `rm` 之前还会再判一次运行态**（见下）。
 6. **写一行审计** —— `<DSH_HOME>/logs/dialogue-cleanup.jsonl`。
+
+#### 为什么第 5 步要「再判一次」
+
+第 1 步判定到第 5 步真正删除之间存在时间窗。窗口内会话可能**开始运行**，
+那就删掉了一个正在用的会话 —— 不可逆。
+
+DSH 本身有内核级会话写锁（`SessionWriteLease`，Windows 命名信号量 / POSIX fd 锁），
+但它**没有暴露给插件**（唯一外部表现是 resume 时的 `session/writer-held` 错误码）。
+所以本插件拿不到原子互斥，只能采用**公开 API 下最保守的策略**：
+在**每个 `rm` 之前**紧贴地再判一次运行态，把窗口从「整个事务」压到「单次探测 → rm」。
+二次确认判定 running 或状态不可知时**拒绝删除该目录**，并如实进 `degradations`
+（`step: "preDeleteRecheck"`），绝不静默当成 idle 删掉。
+
+> **残余风险如实说明**：窗口被压到单条语句级，但**不为零**。彻底消除需要宿主把
+> 写锁挂到公开服务上。详见 [docs/删除安全残留分析.md](docs/删除安全残留分析.md)。
+
+#### 删除是不可逆的
+
+没有回收站、没有撤销。确认框里明说这一点，并且只有两条关闭路径（显式「取消」或 `Esc`）。
+`运行中` 的行不可勾选 —— 宿主会拒的，界面根本不给选。
+
+### 批量删除部分失败时怎么重试
+
+批量结果是逐条的，不会因为一条失败就整批回滚。返回里有：
+
+| 字段 | 含义 |
+|---|---|
+| `requested` / `duplicates` / `total` | 你提交了几条 / 其中重复几条 / 实际处理几条（重复 id 已去重） |
+| `ok` / `fail` | 成功 / 失败条数 |
+| `complete` / `degraded` / `noop` | 完整成功 / 成功但有降级 / 什么都没删到 |
+| `allComplete` | 整批全绿才为 `true`；任一子项有降级即 `false` |
+| `outcomes[]` | 逐条：`outcome`（`deleted`/`noop`/`refused`/`blocked`/`failed`）+ `retryable` |
+| `retry[]` | **只含需要重试的 id**（失败或降级的），已完整成功的不在内 |
+| `degradations[]` | 逐条降级明细（`sessionId` + `step` + `reason`） |
+
+**重试方法**：把 `retry` 数组原样作为下一次 `sessionIds` 提交即可 ——
+不要重跑整批，那样会把已完整成功的条目再做一次无意义的操作。
+`refused` 的条目要先在界面上关掉那个会话（或等它跑完）再重试；
+`noop` 的条目**不需要**重试（它本来就不存在）。
 
 ## HTTP 契约
 
@@ -139,7 +179,30 @@ dsh plugin --profile web add dsh-dialogue-cleanup
 | `titleCacheTtlMs` | `300000` | 标题折叠缓存 TTL；`0` 关闭 |
 | `titleFetchConcurrency` | `8` | 折叠标题时的分片并发 |
 | `titleLimit` | `100` | 每页最多为多少行折叠标题；`0` 完全跳过标题读取 |
-| `runningProbeTtlMs` | `1000` | 运行态快照复用的时长。把批量删除从「O(N) 次全量清单调用」变成 O(1)；`0` 则逐条重探 |
+| `titleSearchLimit` | `40` | 搜索时**单独**的标题预算（与 `titleLimit` 独立）；预算外如实计入 `titles.truncated` |
+| `runningProbeTtlMs` | `1000` | 运行态快照复用的时长。把批量删除从「O(N) 次全量清单调用」变成 O(1)；`0` 则逐条重探。**注意：删除前的最后一道判定不吃这个缓存**（见「删除的六个步骤」） |
+| `auditMaxBytes` | `4194304` | 审计文件轮转阈值（4 MiB）。超过就把当前文件改名为 `.1`，旧的依次后推；`0` = 不轮转 |
+| `auditRotateKeep` | `3` | 轮转保留的历史份数（不含当前文件）。超出该份数的最旧一份会被删除 |
+
+### 审计日志在哪、留多久
+
+默认写到 `<DSH_HOME>/logs/dialogue-cleanup.jsonl`（`DSH_HOME` 通常是 `~/.dsh`），
+一行一条 JSONL。可用 `auditPath` 改位置，但路径会被规范化并**校验必须落在
+`<DSH_HOME>` 之内** —— 越界配置会被**拒绝写入并如实上报**（`audit.ok=false`），
+不会静默写去别处。
+
+**保留策略**：当前文件超过 `auditMaxBytes`（默认 4 MiB）就整份改名为 `.1`，
+`.1→.2`、`.2→.3`，超出 `auditRotateKeep`（默认 3 份）的最旧一份删除。
+所以默认最多占用约 4 份 × 4 MiB。轮转用 rename 搬走整份，**不会截断正在写入的日志**；
+轮转失败时**不阻断写入**（日志继续长总比丢审计好），只把 `rotateError` 作为降级返回。
+
+**字段最小化**：一行只写诊断必需字段（时间 / 操作 / actor / phase / sessionId /
+结果码 / 文件与缓存计数 / 耗时 / 降级步骤）。整份 `runtime`、会话标题、全量路径数组
+**都不写** —— 旧实现把那些都塞进一行，实测 910 B/行；现在实测 **196 B/行**。
+需要明细时按 `sessionId` 去宿主日志里查。
+
+> 审计失败与删除结果是**两件不同的事实**：`audit.ok=false` 只表示留痕失败，
+> 会进结果的 `degradations`（`step: "audit"`），但**不会**把已经执行的删除伪报成回滚。
 
 ## 已知限制
 
@@ -175,19 +238,26 @@ pwsh -File scripts/release.ps1 -LocalOnly
 node scripts/render-shot.mjs
 ```
 
-当前共 **161 条测试 / 9 个文件**：
+当前共 **238 条测试 / 13 个文件**：
 
 | 套件 | 覆盖 |
 |---|---|
 | `contract.test.mjs` | 宿主 ↔ 客户端契约与 slot 声明（最大的一套） |
 | `service.test.mjs` | `deleteSession` 端到端行为与否决路径 |
+| `fault-injection.test.mjs` | **逐步骤故障注入**：磁盘/内存/工作区/审计/通知分别失败时不得冒充完整成功；含 §4.1 删除前二次确认竞态、§4.2 身份查询失败可观测、§4.3 链接跳过可观测、对偶拼写红线、junction 越界（静态 + 竞态） |
+| `isolated-integration.test.mjs` | **隔离环境破坏性集成**：完整副作用清理、running 零改动、真实子进程 SIGKILL 中断后重启重跑、批量部分成功后重试 |
+| `batch-semantics.test.mjs` | 批量语义：去重、`deleted`/`noop`/`refused`/`blocked` 可区分、精确 `retry` 清单、`allComplete` |
+| `audit.test.mjs` | 审计：字段最小化、截断、轮转（含不截断正在写的日志）、并发、路径不可写/越界、禁用、配置边界 |
 | `client.test.mjs` | 注册面、id、不跨包 require |
 | `render.test.mjs` | 组件**真的被渲染**（React 替身） |
-| `artifacts.test.mjs` | 路径约束、符号链接拒绝、另一种拼写的守卫 |
+| `artifacts.test.mjs` | 路径约束、符号链接拒绝、另一种拼写的守卫、`isRealPathInside` 正反断言 |
 | `session-id.test.mjs` | id 校验（不含分隔符与点号） |
 | `eol.test.mjs` | 行尾，以及每个被跟踪文件都被 git 声明为 `eol=lf` |
 | `release-workflow.test.mjs` | OIDC 发布结构（**反向断言**：`pack-release.yml` 不得自带发布步骤） |
 | `ps-script.test.mjs` | Windows PowerShell 5.1 的 BOM / 编码坑 |
+
+另有 `test/integration-real.mjs`（**只读**真实 DSH 检查，需要活着的宿主，故不并入
+`*.test.mjs` 套件）与 `test/mutate-tokens-official.mjs`（变异测试，要求 survived=0）。
 
 其中两条是**因为对应的 bug 真的发出去过、之后才被发现**才补上的：
 
