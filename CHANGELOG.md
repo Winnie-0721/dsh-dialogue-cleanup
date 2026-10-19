@@ -24,6 +24,20 @@ ubuntu/windows；权限只有 `contents: read`，**不接触任何发布凭据**
 > 会被 node **静默忽略**（输出仍是 `ℹ tests N`，没有 `# tests N`），CI 会永远匹配不到
 > 而**每次假红**。必须把 reporter 旗标放在 `--test` 之前。
 
+**首次远端运行还抓到两个更严重的问题（本地 Windows/Node 24 都测不出来）：**
+
+1. **Node 20 的 `node --test` 不支持 glob**：`Could not find '.../test/**/*.test.mjs'`。
+   glob 展开是 Node 22+ 才有的，而 `engines.node` 声明 `>=20.0.0` —— 也就是
+   「文档里写的跑法」在最低支持版本上**根本跑不起来**。`package.json`、`release.ps1`、
+   `ci.yml` 三处都用了它，现已统一到新增的 `scripts/run-tests.mjs`
+   （由 Node 自己枚举文件再传给 `node --test`），三个版本、两个平台行为一致。
+2. **`isInside` 测试硬编码 Windows 路径**：`not ok 236`。POSIX 上 `path.resolve()`
+   把反斜杠当普通文件名字符，`C:\tmp\sessions` 变成无分隔符的单段路径，断言必失败。
+   这不是 `isInside` 的 bug，是测试的平台假设错误；已改为按 `process.platform` 取路径。
+
+修复后 CI **四个组合（node 20/22 × ubuntu/windows）全绿**，
+日志确证每个组合都跑了 13 个文件 / 238 条测试并通过 `≥200` 断言（不是空转）。
+
 #### P0 · 运行态检查与磁盘删除之间的竞态（公开 API 下的最保守策略）
 
 **调查结论（实测，非推测）**：DSH 确实有内核级会话写锁 ——
