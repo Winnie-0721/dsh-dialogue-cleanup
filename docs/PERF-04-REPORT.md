@@ -555,14 +555,19 @@ killed 71 / survived 0
 | `460f8af` | README 中英双份的测试命令与套件清单修正 | 无 | `git revert 460f8af` |
 | `a8c0fa9` | 结论修正（成本由「非 live 字节」决定）+ CHANGELOG | 无 | `git revert a8c0fa9` |
 | `72704ae` | single-flight 判据收紧（表述修正） | 无 | `git revert 72704ae` |
-| `402e859` | 本节回填真实 SHA 与 PR 链接（纯文档） | 无 | `git revert 402e859` |
+| `402e859` | §9 回填真实 SHA 与 PR 链接（纯文档） | 无 | `git revert 402e859` |
+| `5cddcaf` | 补 §12 原始样本附录、修正 single-flight 判据与门禁记录（纯文档） | 无 | `git revert 5cddcaf` |
 
 **关于任务书 §10 建议的 A–E 五提交**：本轮的 A–E 中，**只有「触发代码变更」的部分需要独立提交**。而本次结论是「不改默认并发（D）、不实施异步补标题（E）」，所以 D 与 E 的交付物是**决策记录与设计草案**，不是代码。故按「测量基础设施 / 报告与决策 / 变更记录与勘误」三块提交，并在本表逐条映射到 A–E。这样既满足「不要把宿主恢复、默认并发变更和异步重构放进同一个提交」的实质要求（因为后两者根本没有代码变更），也不制造空提交。
 
-> **注意**：分支上的提交经 GitHub Git Data API 重建（因 `github.com:443` 不可达，只能走 `api.github.com`），
-> 因此**远端 SHA 与本地 SHA 不同**（远端 `3642075e` / `e6853efc` / `d37d48a3` / `c3a595bf` / `5490f71a` / `55ddf680` / `7ec60819` / `6d0c94d4`），
-> 但**每个提交的 tree 都逐个校验过与本地一致**，远端分支 head 的 tree 也与本地 `HEAD` 完全相同。
-> 内容等价，仅哈希不同。
+> **注意**：分支上的提交经 GitHub Git Data API 重建推送（部分时段 `github.com:443` 不可达，
+> 只有 `api.github.com` 可用），因此**远端 SHA 与本地 SHA 不同**。
+> 每个提交推送时都**逐个校验 tree 与本地一致**，且远端分支 head 的 tree 与本地 `HEAD` 完全相同
+> （校验输出形如 `VERIFY remote head=… tree=… localTree=… equal=true`）。**内容等价，仅哈希不同。**
+>
+> 因此本表的 **SHA 是本地 SHA，也是回滚时应使用的 SHA**。若需要远端的对应提交，请按 commit
+> message 在远端分支上检索，而不要用本表的 SHA 去远端 `git show`（会找不到）——这是刻意的
+> 设计取舍：把远端 SHA 列进文档会随每次推送再次失效，无法自洽。
 
 ---
 
