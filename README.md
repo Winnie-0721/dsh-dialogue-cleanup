@@ -187,7 +187,7 @@ They are reported truthfully rather than papered over:
 
 ```sh
 # Full gate: node --check + migration/contract/render/release regression suites
-node --test "test/**/*.test.mjs"
+node scripts/run-tests.mjs
 
 # Release gate only (no version change, no packing, no publishing)
 pwsh -File scripts/release.ps1 -LocalOnly
@@ -196,15 +196,27 @@ pwsh -File scripts/release.ps1 -LocalOnly
 node scripts/render-shot.mjs
 ```
 
-The suites are currently **161 tests across 9 files**:
+> Do not use `node --test "test/**/*.test.mjs"`: **glob expansion needs Node 22+**, while
+> `engines.node` declares `>=20`. On Node 20 that command fails outright with
+> `Could not find '.../test/**/*.test.mjs'`. `scripts/run-tests.mjs` enumerates
+> `test/*.test.mjs` itself and hands the list to `node --test`, so all three Node versions
+> and both platforms behave identically (covered by CI).
+
+The suites are currently **248 tests across 14 files** (3 of them are platform-specific, so
+each platform actually runs 245):
 
 | Suite | Covers |
 |---|---|
 | `contract.test.mjs` | the host ↔ client contract and slot declarations (largest suite) |
 | `service.test.mjs` | `deleteSession` end-to-end behaviour and refusals |
+| `fault-injection.test.mjs` | **per-step fault injection**: disk / memory / workspace / audit / announce each failing must not be reported as complete success; includes the §4.1 pre-delete re-check race, §4.2 observable identity-query failure, §4.3 observable link skipping, the alternate-spelling red line, and junction escape (static + race) |
+| `isolated-integration.test.mjs` | **destructive integration in isolation**: full side-effect cleanup, running sessions untouched, a real child process SIGKILLed mid-run then re-run, batch partial success then retry |
+| `batch-semantics.test.mjs` | batch semantics: de-duplication, distinguishable `deleted`/`noop`/`refused`/`blocked`, exact `retry` list, `allComplete` |
+| `audit.test.mjs` | audit log: field minimisation, truncation, rotation (without truncating the log being written), concurrency, unwritable/out-of-root paths, disabled, config bounds |
+| `perf-regression.test.mjs` | query-performance semantic guards: cold vs warm results identical field by field, no duplicate title reads within one request, N concurrent requests read once, failures recoverable, metrics never leak titles or `cwd` |
 | `client.test.mjs` | registration surface, ids, no-cross-package requires |
 | `render.test.mjs` | components **actually rendered** through a React stand-in |
-| `artifacts.test.mjs` | path containment, symlink refusal, alternate-spelling guards |
+| `artifacts.test.mjs` | path containment, symlink refusal, alternate-spelling guards, `isRealPathInside` positive and negative |
 | `session-id.test.mjs` | id validation (no separators or dots) |
 | `eol.test.mjs` | line endings, and that every tracked file is git-declared `eol=lf` |
 | `release-workflow.test.mjs` | the OIDC publishing structure (**reverse assertion**: `pack-release.yml` must not contain its own publish steps) |
