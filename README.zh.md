@@ -229,7 +229,7 @@ DSH 本身有内核级会话写锁（`SessionWriteLease`，Windows 命名信号�
 
 ```sh
 # 全套门禁：node --check + 契约/渲染/发布等回归套件
-node --test "test/**/*.test.mjs"
+node scripts/run-tests.mjs
 
 # 只跑发布门禁（不改版本、不打包、不发布）
 pwsh -File scripts/release.ps1 -LocalOnly
@@ -238,7 +238,12 @@ pwsh -File scripts/release.ps1 -LocalOnly
 node scripts/render-shot.mjs
 ```
 
-当前共 **238 条测试 / 13 个文件**：
+> 不要写成 `node --test "test/**/*.test.mjs"`：**glob 展开是 Node 22+ 才有的**，
+> 而 `engines.node` 声明 `>=20`。在 Node 20 上这句会直接报
+> `Could not find '.../test/**/*.test.mjs'`。`scripts/run-tests.mjs` 由 Node 自己枚举
+> `test/*.test.mjs` 再交给 `node --test`，三个版本、两个平台行为一致（CI 已覆盖）。
+
+当前共 **248 条测试 / 14 个文件**（其中 3 条是平台相关用例，每个平台实际跑 245 条）：
 
 | 套件 | 覆盖 |
 |---|---|
@@ -248,6 +253,7 @@ node scripts/render-shot.mjs
 | `isolated-integration.test.mjs` | **隔离环境破坏性集成**：完整副作用清理、running 零改动、真实子进程 SIGKILL 中断后重启重跑、批量部分成功后重试 |
 | `batch-semantics.test.mjs` | 批量语义：去重、`deleted`/`noop`/`refused`/`blocked` 可区分、精确 `retry` 清单、`allComplete` |
 | `audit.test.mjs` | 审计：字段最小化、截断、轮转（含不截断正在写的日志）、并发、路径不可写/越界、禁用、配置边界 |
+| `perf-regression.test.mjs` | 查询性能不退化的语义护栏：冷/热结果逐字段一致、单请求不重复读标题、N 并发只读一次、失败可恢复、指标不泄露标题与 `cwd` |
 | `client.test.mjs` | 注册面、id、不跨包 require |
 | `render.test.mjs` | 组件**真的被渲染**（React 替身） |
 | `artifacts.test.mjs` | 路径约束、符号链接拒绝、另一种拼写的守卫、`isRealPathInside` 正反断言 |
