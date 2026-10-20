@@ -408,14 +408,29 @@ readTitleSnapshots(ids)                      lib/index.js:1129
 | 8 | 现有测试与故障注入通过 | ✅ | `node scripts/run-tests.mjs` → **248 tests / 245 pass / 0 fail / 3 skip** |
 | 9 | 真实宿主只用 `/status` 与 `/list` | ✅ | 全部测量脚本只发 GET；未调用 `/delete`、`/archive` |
 
-**测试与变异门禁**（本次在 `E:\Code\dsh-dialogue-cleanup` 上重跑）：
+**本次执行过的全部测试命令与真实结果**（在 `E:\Code\dsh-dialogue-cleanup` 上重跑）：
 
 ```
-node scripts/run-tests.mjs
+$ node --check lib/artifacts.js lib/audit.js lib/config.js lib/http.js \
+               lib/index.js lib/service.js client.js
+（无输出 = 全部通过）
+
+$ node scripts/run-tests.mjs
 ℹ tests 248   ℹ pass 245   ℹ fail 0   ℹ skipped 3
+
+$ node test/mutate-tokens-official.mjs
+killed 71 / survived 0
 ```
 
 3 个 skip 是平台相关用例（POSIX/Windows 各自只会跑一侧），与本次改动无关。
+
+**变异门禁的读数含义**：`survived 0` 表示 71 个故意注入的缺陷（含本次整改留下的 N1–N9 安全回归靶标，例如「去掉真实路径校验」「readdir 错误重新被吞」「对偶拼写守卫不查持久语料」）全部被测试杀死。变异的全量逐条输出由 CI 的 `变异测试` job 在 push 到 `main` 时执行；PR 上该 job 按设计 skip。
+
+**远端独立验证**：分支推送后 CI 在 GitHub 上跑了两次完整矩阵（PR #3），**四个测试 job 全部 success**：
+
+- `test (node 20 · ubuntu-latest)`、`test (node 22 · ubuntu-latest)`、`test (node 20 · windows-latest)`、`test (node 22 · windows-latest)`
+- run `39366145267`（CI #9，提交 `72704ae` 后）与 run `39366246114`（CI #10，提交 `402e859` 后）均为 `completed / success`
+- `变异测试（survived 必须为 0）` 在 PR 上 `skipped` —— 该 job 只在 push 到 `main` 时运行，**因此远端 CI 未独立复验变异门禁，变异的 71/71 是本地实测结果**（如实记录，不冒充远端验证）。
 
 ---
 
@@ -540,11 +555,12 @@ node scripts/run-tests.mjs
 | `460f8af` | README 中英双份的测试命令与套件清单修正 | 无 | `git revert 460f8af` |
 | `a8c0fa9` | 结论修正（成本由「非 live 字节」决定）+ CHANGELOG | 无 | `git revert a8c0fa9` |
 | `72704ae` | single-flight 判据收紧（表述修正） | 无 | `git revert 72704ae` |
+| `402e859` | 本节回填真实 SHA 与 PR 链接（纯文档） | 无 | `git revert 402e859` |
 
 **关于任务书 §10 建议的 A–E 五提交**：本轮的 A–E 中，**只有「触发代码变更」的部分需要独立提交**。而本次结论是「不改默认并发（D）、不实施异步补标题（E）」，所以 D 与 E 的交付物是**决策记录与设计草案**，不是代码。故按「测量基础设施 / 报告与决策 / 变更记录与勘误」三块提交，并在本表逐条映射到 A–E。这样既满足「不要把宿主恢复、默认并发变更和异步重构放进同一个提交」的实质要求（因为后两者根本没有代码变更），也不制造空提交。
 
 > **注意**：分支上的提交经 GitHub Git Data API 重建（因 `github.com:443` 不可达，只能走 `api.github.com`），
-> 因此**远端 SHA 与本地 SHA 不同**（远端 `3642075e` / `e6853efc` / `d37d48a3` / `c3a595bf` / `5490f71a` / `55ddf680` / `7ec60819`），
+> 因此**远端 SHA 与本地 SHA 不同**（远端 `3642075e` / `e6853efc` / `d37d48a3` / `c3a595bf` / `5490f71a` / `55ddf680` / `7ec60819` / `6d0c94d4`），
 > 但**每个提交的 tree 都逐个校验过与本地一致**，远端分支 head 的 tree 也与本地 `HEAD` 完全相同。
 > 内容等价，仅哈希不同。
 
@@ -588,10 +604,125 @@ node scripts/bench-real-host.mjs concurrent --levels 1,2,4,8 --rounds 3 --pageSi
 | DoD 条件 | 状态 |
 |---|---|
 | DSH 宿主 `/status` 与 `/list` 稳定工作 | ✅ 连续 4 次成功，无 `part is not iterable`；跨两次宿主重启（端口 46664 → 43547 → 29049）均正常 |
-| 已获得真实宿主冷/热查询基准 | ✅ 热态多批（10 样本）；冷态取得 **8 个零请求静默有效样本**（1/2/4/8 并发各一轮、单条样本、重启后首查、live 拆分对照两个），探针污染样本全部排除并重采 |
-| 已验证 single-flight 真实并发效果 | ✅ **两轮独立复现**：2 并发 `wallMs` 1519 < 单请求 1632；618.5 < 535。无去重时 wall 应约为单请求的 2 倍；异常恢复由【隔离】C-5/C-6 覆盖 |
+| 已获得真实宿主冷/热查询基准 | ✅ 热态多批（10 样本）；冷态取得 **10 个零请求静默窗口样本（两轮各 5 个：4a/4b/4c-2/4c-4/4c-8）**，外加**重启后首查 1 个**与 **live 隔离对照 2 个**（27 MB live 单条冷读 145 ms；同批 `pageSize=200` 紧跟 1180 ms）；全部以该次测量自身的 `cached==0 && fetched>0` 判定，探针污染样本全部排除并重采 |
+| 已验证 single-flight 真实并发效果 | ✅ **两轮独立复现**，判据是「2 并发 `wallMs` 是否远低于 2× 单请求」：轮 A `1519` vs 2×`1632`=3264*；轮 B `618.5` vs 2×`535`=1070*。两轮 wall 都只有无去重期望值的 46%–58%。**注**：轮 B 的 618.5 高于单请求 535（+15%），故「wall 低于单请求」不是可靠判据，只用「远低于 2× 单请求」，理由见 §3；异常恢复由【隔离】C-5/C-6 覆盖 |
 | 所有安全和回归测试通过 | ✅ 248 tests / 245 pass / 0 fail / 3 skip（平台相关） |
 | 有数据支撑的并发参数决策 | ✅ 保持 8；两轮实测并发 4/8 分别比单请求慢 22%/36% 与 37%/120%，机制见 §4 D-01 |
 | 报告严格区分真实宿主/隔离测试/推算 | ✅ 全文用【真机】【隔离】【本机】标注；**已自我否证三处曾写入报告的结论**（「单条 1893 ms」实为全量成本；「预测 1616 ms 误差 1%」建立在作废数字上；「本机成比例偏慢 1.64–1.68 倍」口径不一致），作废过程保留在 §2 B-04/B-02b/§8 供复核 |
 | 未经授权没有发布包或创建 Release | ✅ 未改版本号、未发布、未创建 Release |
 | 未降低安全检查或改变结果语义 | ✅ 未改 `titleLimit`/排序/分页/删除保护；语义不变性指纹 `c33620121c60` 在冷热、排序切换、多轮采集中一致 |
+
+---
+
+## 12. 附录：原始样本（逐条内联，便于复核）
+
+任务书 §9 第 2 项要求「真实宿主冷/热查询**原始样本**与统计摘要」。测量脚本与 `out/*.json` 保存在仓库外的临时目录 `E:\Code\perf04-repro\`（按约定在用户复核后删除），**因此把关键原始值内联在此**，使本报告脱离该目录仍可独立复核。
+
+所有数值均为**直接记录的原始值**，未做平滑或剔除（无效样本单独标注）。
+
+### 12.1 宿主恢复检查（4 次连续 `/list?pageSize=50`）
+
+| run | status | ok | `clientMs` | `tookMs` | items | `titles{requested,cached,fetched}` |
+|---|---|---|---|---|---|---|
+| 1 | 200 | true | 588.0 | 586 | 16 | 16 / 0 / 16 |
+| 2 | 200 | true | 60.3 | 59 | 16 | 16 / 16 / 0 |
+| 3 | 200 | true | 56.8 | 54 | 16 | 16 / 16 / 0 |
+| 4 | 200 | true | 84.4 | 82 | 16 | 16 / 16 / 0 |
+
+run 1 是宿主重启后首查（`titleCache` 为空），因此是冷的；run 2–4 全命中。四次均无 `part is not iterable`。
+
+### 12.2 热态基线（10 样本，`pageSize=50`）
+
+```
+clientMs.raw = [48.9, 50.6, 51.4, 51.7, 52.7, 55.9, 59.1, 60.5, 70.4, 100.5]
+tookMs.raw  = [48,   49,   50,   50,   52,   54,   57,   59,   69,   97  ]
+clientMs: n=10 min=48.9 p50=52.7 p95=70.4 max=100.5 mean=60.2
+tookMs:   n=10 min=48   p50=52   p95=69   max=97    mean=58.5
+fetchedAll=0   distinctFingerprints=1   resultCount=[16]*10
+```
+
+每个样本自身的 `titles` 均为 `{requested:16, cached:16, fetched:0, failed:0, truncated:0, skipped:false}`。
+
+### 12.3 冷态窗口（五个窗口，全部零请求静默 360 s）
+
+**4a `pageSize=1`**（`waitedMs=360002`，`anchorMs=1792463766365`）
+
+```
+冷：clientMs=71.8  tookMs=66  items=1/16  titles{requested:1, cached:0, fetched:1}
+热对照：clientMs=50.1  tookMs=49  titles{requested:1, cached:1, fetched:0}
+```
+
+**4b `pageSize=200`**（`waitedMs=360011`，`anchorMs=1792464126491`）
+
+```
+clientMs=537.6  tookMs=535  items=16/16  fingerprint=c33620121c60
+titles{requested:16, cached:0, fetched:16, failed:0, truncated:0}
+```
+
+**4c-2**（`waitedMs=360005`，`anchorMs=1792464487040`）
+
+```
+wallMs=618.5  ok=2/2  fetchedAll=32  cachedAll=0
+perRequestFetched=[16,16]  perRequestCached=[0,0]
+perRequestTookMs=[612,612]  perRequestClientMs=[618,616.5]
+tookMs.raw=[612,612]  clientMs.raw=[616.5,618]  distinctFingerprints=1  tookMsIdentical=true
+```
+
+**4c-4**（`waitedMs=360001`，`anchorMs=1792464847663`）
+
+```
+wallMs=734.5  ok=4/4  fetchedAll=64  cachedAll=0
+perRequestFetched=[16,16,16,16]  perRequestCached=[0,0,0,0]
+perRequestTookMs=[724,725,724,724]  perRequestClientMs=[734.3,733.7,733.4,733.4]
+tookMs.raw=[724,724,724,725]  distinctFingerprints=1  tookMsIdentical=false
+```
+
+**4c-8**（`waitedMs=360006`，`anchorMs=1792465208399`）
+
+```
+wallMs=1178.8  ok=8/8  fetchedAll=128  cachedAll=0
+perRequestFetched=[16]*8  perRequestCached=[0]*8
+perRequestTookMs=[1168,1168,1168,1168,1168,1168,1167,1166]
+perRequestClientMs=[1178.3,1176.1,1175.5,1175.2,1175.1,1175.1,1175,1175]
+tookMs.raw=[1166,1167,1168,1168,1168,1168,1168,1168]  distinctFingerprints=1
+```
+
+五个窗口全部 `cachedAll=0 && fetched>0`，即**均为有效冷样本**，无探针污染。
+
+### 12.4 本机 CPU 归因（16 条候选，逐帧解压 + 逐行 JSON.parse）
+
+| `idHash` | fileMB | frames | decodedMB | lines | decompMs | parseMs | totalMs |
+|---|---|---|---|---|---|---|---|
+| `d7d90226` | 26.91 | 12905 | 94.07 | 24988 | 842 | 353 | **1194** |
+| `9bd30945` | 6.41 | 3557 | 21.48 | 6893 | 233 | 96 | 330 |
+| `adc3b41e` | 6.40 | 3220 | 21.24 | 6253 | 153 | 88 | 240 |
+| `6ef53729` | 6.32 | 2561 | 21.54 | 5221 | 133 | 101 | 234 |
+| `956a63a8` | 2.33 | 1679 | 7.87 | 3050 | 62 | 35 | 97 |
+| `74ad8886` | 1.39 | 586 | 4.81 | 1147 | 30 | 21 | 51 |
+| `518334cf` | 1.14 | 644 | 3.71 | 1241 | 27 | 20 | 47 |
+| `924bff46` | 0.78 | 390 | 3.32 | 698 | 17 | 15 | 32 |
+
+`totalSerialMs=2250`。上表 8 条合计 **2225 ms**，其余 8 条（均 ≤0.36 MB）合计 **25 ms**；最贵 3 条合计 1764 ms，`top3Share=78.4%`。**这组数字只用于相对排序**，不可与宿主绝对值直接比较（口径不同，见 §2 B-04）。
+
+### 12.5 语义不变性（过滤/排序/分页未变）
+
+```
+defaultFingerprint = c33620121c60
+createdFingerprint = c33620121c60
+defaultVsCreatedSameSet = true
+activityEqualsDefault   = true
+resultCount=16  sessionCount=16  runningCount=1  deletableCount=15
+```
+
+`sampleKeys` = `sessionId, title, project, workspaceTitle, running, blank, live, persisted, archived, subagent, delegationDepth, parentSessionId, createdAt, updatedAt, deletable, blockedReason`（**字段集合与改动前一致**）。
+
+### 12.6 未纳入上表的原始样本（如实标注）
+
+| 样本 | 原始值 | 为何不纳入 |
+|---|---|---|
+| 早期窗口 A（8 并发） | `wallMs=2637.6`，`tookMs` 全为 2623–2624，每请求 `fetched=20` | 探针式冷态，**已作废**；方向一致但不作权威证据 |
+| 早期窗口 C（`pageSize=200`） | `tookMs=2149`，`titles{requested:22, cached:2, fetched:20}` | 同上；且当时语料含 58.33 MB 巨日志，live 组成未记录 |
+| 早期窗口 D2（2 并发） | `wallMs=113.5`，`fetchedAll=1` | **冷态未建立**（探针已预热），`fetchedAll=1` 曾被误读为去重证据 |
+| 早期窗口 D4（4 并发） | `wallMs=2287.6`，`tookMs` 全为 2283 | 探针式冷态，已作废 |
+| 重启后首查 | `clientMs=1651.1`，`tookMs=1647`，`titles{requested:16,cached:0,fetched:16}` | **有效**，但属「重启后首查」特殊场景；`liveN=1 / liveMB=27.19 / nonLiveMB=25.37`，用于 §B-02b 的 live 对照 |
+| live 单条隔离 | 27 MB live 会话冷读 `tookMs=145`、热读 113 | **有效**，作为「live 不读盘」的判别证据（本机解码同一条需 900 ms+） |
