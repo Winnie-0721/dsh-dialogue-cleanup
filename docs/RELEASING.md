@@ -59,7 +59,8 @@ CI 段（`.github/workflows/pack-release.yml`，`push: tags: ['v*']` 触发）�
 3. `gh release create v<version> dist/*.tgz dist/version.json`：**Release 附件是回退与旧版安装的
    唯一下载源**；Release 已存在时改走 `gh release upload --clobber`（重跑幂等）；
    Release 正文取 CHANGELOG 的同名节，读文件一律显式 `-Encoding UTF8`；
-4. `publish-npm` job：**不自己写发布步骤，而是 `uses: ./.github/workflows/publish-npm.yml` 复用**。
+4. **npm 发布由 `publish-npm.yml` 自己并列触发**（同样监听 `push: tags: ['v*']`），
+   本文件**不调用**它。原因见 §5.1 —— 用 `workflow_call` 复用会让 npm 校验到调用方文件名。
 
 ## 3. 用法
 
@@ -107,35 +108,40 @@ pwsh -File scripts\release.ps1 -Bump patch -SkipPush
 
 配置位置：npmjs.com → 包的 Settings → Trusted Publisher（新包走 "pending publisher"）。
 
-### 5.1 为什么发布逻辑**只能有一份**
+### 5.1 为什么发布逻辑**只能由 publish-npm.yml 自己标签触发**
 
-npm 的 Trusted Publisher 把信任绑定到**具体 workflow 文件名**，而 OIDC 令牌里 npm 校验的是
-`job_workflow_ref`，**实测**：
+npm 的 Trusted Publisher 把信任绑定到**具体 workflow 文件名**，而 npm 服务端校验的是
+**调用方**的文件名。npm 官方文档《Trusted publishing》原文：
 
-- 普通 job：`job_workflow_ref` = 所在文件；
-- `workflow_call`：`job_workflow_ref` = **被调用**的文件（`workflow_ref` 才是调用方）。
+> Some GitHub Actions workflows use workflow_call to invoke other workflows that run
+> npm publish ... When this happens, validation checks **the calling workflow's name**
+> instead of the workflow that actually contains the publish command, which can cause
+> configuration mismatches.
 
-所以 `pack-release.yml` 里那个 job **必须**写成：
-
-```yaml
-  publish-npm:
-    needs: pack
-    permissions:
-      contents: read
-      id-token: write
-    uses: ./.github/workflows/publish-npm.yml   # ← job_workflow_ref 就是它，与登记一致
-```
-
-**自己写一遍发布步骤**会让令牌里的文件名变成 `pack-release.yml`，npm 直接回：
+⚠️ **本仓库 1.1.2 及之前的文档曾写错**：那时写的是「`workflow_call` 时 `job_workflow_ref`
+= 被调用文件，所以复用可行」。OIDC 令牌里的字段确实是这样，**但 npm 不看它**。所以
+`pack-release.yml` 用 `uses:` 调过去时，npm 看到的是 `pack-release.yml` → 与登记的
+`publish-npm.yml` 不符 → 令牌交换被拒 → 一律：
 
 ```
 npm error code ENEEDAUTH
 npm error need auth This command requires you to be logged in to https://registry.npmjs.org/
 ```
 
-参考仓库在 v1.1.6 与 v1.2.0 **各踩一次**，每次都要人工手动补发。
-本仓库的 `test/release-workflow.test.mjs` 用**反向断言**钉住这条底线（变异测试已验证：
-把 `uses:` 换成自己跑 `npm stage publish` → 断言立刻红）。
+历史对照（很能说明问题）：
+
+| 版本 | 触发方式 | npm 结果 |
+|---|---|---|
+| 1.1.0 | 手动 `workflow_dispatch` 直接跑 `publish-npm.yml` | ✅ 成功 |
+| 1.1.1 | 标签 → `pack-release.yml` → `workflow_call` | ❌ ENEEDAUTH |
+| 1.1.2 | 同上 | ❌ ENEEDAUTH |
+
+**正确结构**：`publish-npm.yml` 自己监听 `push: tags: ['v*']`，与 `pack-release.yml`
+**并列触发、互不调用**。一个发 GitHub Release，一个发 npm。`pack-release.yml` 里
+**不得**再有 `publish-npm` job，也**不得**出现 `uses: ./.github/workflows/publish-npm.yml`。
+
+发布逻辑仍然只有一份（就在 `publish-npm.yml`），只是从「被复用」改成「并列触发」。
+`test/release-workflow.test.mjs` 用反向断言钉住这条底线：退回 `workflow_call` 立刻红。
 
 ### 5.2 发布是「暂存 + 人工批准」两步
 

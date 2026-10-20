@@ -289,7 +289,7 @@ node scripts/render-shot.mjs
 | `lib/audit.js` | JSONL 审计 |
 | `client.js` | Web 客户端半：slot 注册（菜单项 + 确认框 + 设置页 section） |
 | `cordis.patch.yml` | 插入宿主半，`inject: [webServer]` |
-| `.github/workflows/` | `pack-release.yml`（标签 → 门禁 → 打包 → GitHub Release）与 `publish-npm.yml`（**唯一**的 npm 发布实现，经 `workflow_call` 复用） |
+| `.github/workflows/` | `pack-release.yml`（标签 → 门禁 → 打包 → GitHub Release）与 `publish-npm.yml`（**唯一**的 npm 发布实现，由同一次标签推送并列触发，不经 `workflow_call` 复用） |
 | `docs/RELEASING.md` | 版本号规则与发布链路 |
 | `scripts/release.ps1` | 版本递增 + 门禁（+ CI 打包发布） |
 | `scripts/render-shot.mjs` | 重新生成文档截图 |

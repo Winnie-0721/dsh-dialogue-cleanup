@@ -1,5 +1,36 @@
 # 变更记录
 
+## Unreleased
+
+### 修复：npm 发布永远 ENEEDAUTH —— 改为 publish-npm.yml 自己被标签触发
+
+**不影响已发布的包内容，只修发布链路。** 1.1.0 之后的所有版本（1.1.1、1.1.2）
+GitHub Release 都正常产出，但 npm 上一直没有它们 —— 每次都红在 `Stage publish to npm`。
+
+根因（npm 官方文档《Trusted publishing》原文）：
+
+> Some GitHub Actions workflows use workflow_call to invoke other workflows that run
+> npm publish ... When this happens, validation checks **the calling workflow's name**
+> instead of the workflow that actually contains the publish command.
+
+即：OIDC 令牌里的 `job_workflow_ref` 确实指向被调用的 `publish-npm.yml`（所以文件内的
+身份自检一路绿灯），但 **npm 服务端校验的是调用方文件名**。由 `pack-release.yml` 用
+`uses:` 调过去时，npm 看到的是 `pack-release.yml`，与登记的 `publish-npm.yml` 不符
+→ 令牌交换被拒 → `npm error code ENEEDAUTH`。
+
+历史对照：1.1.0 是手动 `workflow_dispatch` 直接跑 `publish-npm.yml`（调用方=自己）→ 成功；
+1.1.1 / 1.1.2 是标签触发 `pack-release.yml` → `workflow_call` → 失败。
+
+改动：
+
+- `publish-npm.yml` 自己声明 `on: push: tags: ['v*']`，与 `pack-release.yml`
+  **并列触发、互不调用**；删除 `workflow_call`。
+- `pack-release.yml` 里整个 `publish-npm` job 删除（它不可能通过校验）。
+- `test/release-workflow.test.mjs` 的断言方向反转：从「必须有 `workflow_call` +
+  `uses:`」改为「**不得**有 `workflow_call` / `uses:` / 第二个发布 job」。
+- 同步更正 `docs/RELEASING.md` §5.1、README 两份、`scripts/release.ps1` 头部注释里
+  原先那条**错误**的推导（旧文写的是「`job_workflow_ref` = 被调用文件，所以复用可行」）。
+
 ## 1.1.2
 
 ### 性能：查询延迟归因与标题读取去重（PERF-03 / PERF-04）

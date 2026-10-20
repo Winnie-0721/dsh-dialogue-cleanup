@@ -20,7 +20,7 @@
 #
 # CI 路径（.github/workflows/pack-release.yml，标签推送触发）：
 #   pwsh -File scripts\release.ps1 -CiPack                   # 门禁 → 打包 → 创建 GitHub Release 并传附件
-#   npm 发布由同一 workflow 的 publish-npm job 接手。
+#   npm 发布由 .github/workflows/publish-npm.yml 自己并列触发（同一次标签推送，不经 workflow_call）。
 # 回退 / 旧版安装一律从 GitHub Release 附件下载（仓库里不留任何 tarball）。
 
 [CmdletBinding()]

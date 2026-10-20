@@ -2,17 +2,22 @@ name: Pack and Release
 
 # 打包与发布都在 CI 做——本地从此不产生任何打包产物，也不消耗 gh / npm token：
 #   标签推送 → 门禁（release.ps1 内跑全部 test/*.test.mjs）→ pnpm pack
-#   → 创建 GitHub Release 并传 tarball + version.json → 发布 npm。
+#   → 创建 GitHub Release 并传 tarball + version.json。
 #
 # 本地只剩轻量五步：门禁 → 递增 → 提交 → 打标签 → 推送（scripts/release.ps1 -Bump patch）。
 # 回退 / 旧版安装一律从 GitHub Release 附件下载（仓库里不留任何 tarball）。
 #
 # workflow_dispatch 用于补跑 / 回填：按 package.json 的版本找到对应标签重新打包；
-# Release 已存在则幂等补传附件（--clobber），npm 已有该版本则跳过。
-# （release 事件不会因 GITHUB_TOKEN 创建的 Release 而触发其它 workflow，所以本文件的
-#   publish-npm job 必须存在——但它**不自己执行发布**，而是 `uses:` 复用 publish-npm.yml：
-#   npm 的 Trusted Publisher 按 OIDC 里的 workflow **文件名**匹配，只有复用才能让文件名
-#   仍是登记的那个。publish-npm.yml 同时保留 release/workflow_dispatch 作人工补发通道。）
+# Release 已存在则幂等补传附件（--clobber）。
+#
+# **npm 发布不在本文件里，本文件也不去调用 publish-npm.yml**（v1.1.1 / v1.1.2 查清的真因）：
+#   npm 官方文档《Trusted publishing》写明，用 workflow_call 调用别的 workflow 发 npm 时
+#   「validation checks the calling workflow's name instead of the workflow that actually
+#    contains the publish command」。由本文件调用过去，npm 看到的是 pack-release.yml，
+#   与它登记的 publish-npm.yml 不符 → 令牌交换被拒 → 一律 ENEEDAUTH。
+#
+#   现在 publish-npm.yml **自己监听同样的 `push: tags: ['v*']`**：两个 workflow 并列触发、
+#   互不调用。本文件只负责「打包 + 建 GitHub Release」，发 npm 由那个文件自己来。
 on:
   push:
     tags: ['v*']
@@ -42,20 +47,3 @@ jobs:
         run: pwsh -NoProfile -File scripts/release.ps1 -CiPack
         env:
           GH_TOKEN: ${{ github.token }}
-
-  publish-npm:
-    needs: pack
-    # **复用 publish-npm.yml，不要自己重写一遍发布步骤。**
-    #
-    # npm 的 Trusted Publisher 绑定的是**具体 workflow 文件名**，而 OIDC 里被校验的
-    # `job_workflow_ref` 指向**被调用的那个文件**（见 docs/RELEASING.md §4.2.1）。
-    # 所以：
-    #   这样写（workflow_call 复用）  → job_workflow_ref = publish-npm.yml  ✅ 与登记一致
-    #   自己写 job 跑 npm            → job_workflow_ref = pack-release.yml ❌ → ENEEDAUTH
-    #
-    # 权限必须在这里声明：可复用 workflow 的调用方要给出 id-token: write，
-    # 被调用文件自己再声明一次（两边都要有，缺一个 OIDC 就拿不到）。
-    permissions:
-      contents: read
-      id-token: write
-    uses: ./.github/workflows/publish-npm.yml

@@ -246,7 +246,7 @@ Two of these exist because the corresponding bug actually shipped and was caught
 | `lib/audit.js` | JSONL audit trail |
 | `client.js` | the web client half: slot registrations (menu row + confirm overlay + settings section) |
 | `cordis.patch.yml` | inserts the host half, `inject: [webServer]` |
-| `.github/workflows/` | `pack-release.yml` (tag → gate → pack → GitHub Release) and `publish-npm.yml` (**the only** npm-publish implementation, reused via `workflow_call`) |
+| `.github/workflows/` | `pack-release.yml` (tag → gate → pack → GitHub Release) and `publish-npm.yml` (**the only** npm-publish implementation, triggered by the same tag push in parallel — never invoked via `workflow_call`) |
 | `docs/RELEASING.md` | version rules and the release chain |
 | `scripts/release.ps1` | version bump + gate (+ CI pack/release) |
 | `scripts/render-shot.mjs` | regenerates the documentation screenshots |

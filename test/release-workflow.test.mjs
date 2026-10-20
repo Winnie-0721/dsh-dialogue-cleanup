@@ -6,15 +6,21 @@
  * 它不是风格问题，是**凭据结构**问题，而且**静默**：pack 那半成功、Release 附件也都就绪，
  * 只有 publish job 报 `npm error code ENEEDAUTH`，看起来像「npm 抽风」。
  *
- * 根因：npm 的 Trusted Publisher 把信任绑定到**具体 workflow 文件名**；OIDC 令牌里
- * npm 实际校验的是 `job_workflow_ref`，而**实测**：
- *   - 普通 job：        job_workflow_ref = 所在文件
- *   - workflow_call：   job_workflow_ref = **被调用**的文件（workflow_ref 才是调用方）
- * 所以「pack-release.yml 里自己写一遍发布步骤」→ 令牌里是 pack-release.yml
- * → 与登记的 publish-npm.yml 不符 → ENEEDAUTH。
+ * 根因（v1.1.1 / v1.1.2 两次 npm 发布失败的真因，2026-10-20 查清）：npm 的 Trusted
+ * Publisher 把信任绑定到**具体 workflow 文件名**，而 npm 服务端校验的是**调用方**：
  *
- * 本套件把「发布只能由 publish-npm.yml 亲自执行」钉死，防止有人（包括将来的我）
- * 为了「少一个文件」再把步骤复制回 pack-release.yml。同时钉住必须保留的幂等闸门。
+ *   npm 官方文档《Trusted publishing》：
+ *     "Some GitHub Actions workflows use workflow_call to invoke other workflows that run
+ *      npm publish ... When this happens, validation checks **the calling workflow's name**
+ *      instead of the workflow that actually contains the publish command."
+ *
+ * 所以早先那版「用 workflow_call 复用 → job_workflow_ref 仍是登记的文件 → 可行」的推导
+ * 是**错的**：OIDC 令牌字段确实没错，但 npm 不看它。由 pack-release.yml 调过去时 npm 看到
+ * 的是 pack-release.yml → 与登记的 publish-npm.yml 不符 → 令牌交换被拒 → ENEEDAUTH。
+ *
+ * 正确结构：**publish-npm.yml 自己监听 `push: tags: ['v*']`**，与 pack-release.yml
+ * 并列触发、互不调用。本套件把这个结构钉死，防止有人（包括将来的我）为了「少一个文件」
+ * 又改回复用。同时钉住必须保留的幂等闸门。
  *
  * 用法：node test/release-workflow.test.mjs
  */
@@ -45,69 +51,63 @@ function stepBlock(text, stepName) {
   return lines.slice(start, end).join('\n')
 }
 
-/** 取出某个 workflow 里某个顶层 job 的文本（到下一个同级 job 或文件末）。 */
-function jobBlock(text, jobName) {
-  const lines = text.split('\n')
-  const start = lines.findIndex((l) => new RegExp(`^  ${jobName}:\\s*$`).test(l))
-  assert.ok(start !== -1, `找不到 job: ${jobName}`)
-  let end = lines.length
-  for (let i = start + 1; i < lines.length; i += 1) {
-    if (/^ {2}\S/.test(lines[i])) { end = i; break }
-  }
-  return lines.slice(start, end).join('\n')
+/** 去掉整行注释（`#` 开头，允许前导空白），只留真正生效的 YAML。 */
+function liveLines(text) {
+  return text.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n')
 }
 
-test('发布工作流：npm 发布只能由 publish-npm.yml 亲自执行（防 ENEEDAUTH 复发）', () => {
-  const publish = read('publish-npm.yml')
-  const pack = read('pack-release.yml')
+test('发布工作流：npm 发布只能由 publish-npm.yml 自己标签触发（防 ENEEDAUTH 复发）', () => {
+  const publishRaw = read('publish-npm.yml')
+  const publish = liveLines(publishRaw)
+  const pack = liveLines(read('pack-release.yml'))
 
-  // publish-npm.yml 可被复用（少了它，pack-release 的 uses: 会直接报 workflow 不可用）。
+  // ① 主路径：本文件自己监听标签推送。这是「npm 看到的调用方 = 本文件」的唯一保证。
   assert.match(
     publish,
-    /^on:\s*$(?:.*\n)*?^ {2}workflow_call:\s*$/m,
-    'publish-npm.yml 必须在 on: 下声明 workflow_call，才能被 pack-release 复用',
+    /^ {2}push:\s*$(?:.*\n)*?^ {4}tags:\s*\[?'?v\*'?\]?\s*$/m,
+    'publish-npm.yml 必须在 on: 下自己声明 push: tags: [v*] —— 由 pack-release 调用会 ENEEDAUTH',
   )
   assert.match(publish, /^ {2}workflow_dispatch:\s*$/m, '人工补发通道不能被删')
 
-  // pack-release.yml 必须复用，而不是自己跑发布命令。
-  const block = jobBlock(pack, 'publish-npm')
-  assert.match(
-    block,
-    /uses:\s*\.\/\.github\/workflows\/publish-npm\.yml/,
-    'publish-npm job 必须 `uses: ./.github/workflows/publish-npm.yml`（这样 job_workflow_ref 才是登记的文件名）',
-  )
-  // 关键反向断言：不许出现 npm 发布命令。这就是那个复发两次的 bug。
+  // ② 反向断言：绝不能退回 workflow_call 复用路径（v1.1.1 / v1.1.2 就是死在这条路上）。
   assert.equal(
-    /npm\s+stage\s+publish/.test(block),
+    /^ {2}workflow_call:\s*$/m.test(publish),
     false,
-    'pack-release.yml 里不得出现 npm stage publish——自己执行会让 OIDC 的文件名变成 pack-release.yml，npm 直接回 ENEEDAUTH',
-  )
-  assert.equal(/runs-on:/.test(block), false, '复用型 job 不能带 runs-on（那是被调用文件的事）')
-
-  // 调用方必须为可复用 workflow 授予 id-token: write（OIDC 必需），且必须是**顶层** permissions。
-  const lines = block.split('\n')
-  const permAt = lines.findIndex((l) => /^ {4}permissions:\s*$/.test(l))
-  assert.ok(permAt !== -1, 'publish-npm job 必须显式声明 permissions（与 uses: 同级，缩进 4 空格）')
-  const permLines = []
-  for (let i = permAt + 1; i < lines.length; i += 1) {
-    if (/^ {4}\S/.test(lines[i])) break
-    permLines.push(lines[i])
-  }
-  assert.ok(
-    permLines.some((l) => /id-token:\s*write/.test(l)),
-    'publish-npm job 的 permissions 里必须有 id-token: write',
+    'publish-npm.yml 不得声明 workflow_call：npm 校验的是调用方文件名，复用必然 ENEEDAUTH',
   )
 
-  // 被调用文件自己也声明 id-token: write。
-  const at = publish.split('\n').findIndex((l) => /^permissions:\s*$/.test(l))
-  assert.ok(at !== -1, 'publish-npm.yml 必须有顶层 permissions:')
+  // ③ pack-release.yml 里不许再有发布 job，也不许用 uses: 调过去。
+  assert.equal(
+    /^ {2}publish-npm:\s*$/m.test(pack),
+    false,
+    'pack-release.yml 里不得有 publish-npm job —— 调用方是 pack-release.yml，npm 不认',
+  )
+  assert.equal(
+    /uses:\s*\.\/\.github\/workflows\/publish-npm\.yml/.test(pack),
+    false,
+    'pack-release.yml 不得 uses: publish-npm.yml（workflow_call 路径已被证伪）',
+  )
+
+  // ④ 关键反向断言：pack-release.yml 里不许出现 npm 发布命令（第二份实现）。
+  assert.equal(
+    /npm\s+stage\s+publish/.test(pack),
+    false,
+    'pack-release.yml 里不得出现 npm stage publish',
+  )
+
+  // ⑤ 本文件自己的顶层 permissions 必须有 id-token: write（OIDC 必需）。
   const pLines = publish.split('\n')
+  const at = pLines.findIndex((l) => /^permissions:\s*$/.test(l))
+  assert.ok(at !== -1, 'publish-npm.yml 必须有顶层 permissions:')
   const pBlock = []
   for (let i = at + 1; i < pLines.length; i += 1) {
     if (/^\S/.test(pLines[i])) break
     pBlock.push(pLines[i])
   }
-  assert.ok(pBlock.some((l) => /id-token:\s*write/.test(l)), 'publish-npm.yml 顶层 permissions 里必须有 id-token: write')
+  assert.ok(
+    pBlock.some((l) => /id-token:\s*write/.test(l)),
+    'publish-npm.yml 顶层 permissions 里必须有 id-token: write',
+  )
 })
 
 test('发布工作流：幂等闸门（版本已在 npm 则跳过）', () => {
