@@ -146,6 +146,8 @@ upgrades. A matching override **replaces the whole `config`** — write every fi
 | `maxBodyBytes` | `65536` | request-body ceiling (upstream: 1 MiB) |
 | `readTimeoutMs` | `10000` | body-read timeout (upstream: none) |
 | `audit` / `auditPath` | `true` / `null` | audit log; `null` → `<DSH_HOME>/logs/...` |
+| `auditMaxBytes` | `4194304` | audit rotation threshold (4 MiB); `0` disables rotation |
+| `auditRotateKeep` | `3` | rotated files kept (excluding the current one) |
 | `rateLimitPerMinute` | `60` | per-minute delete **request** budget (a batch counts once); `0` disables |
 | `requireIdleSession` | `true` | safety valve for the running-session refusal |
 | `stopIdleAgent` | `false` | see the honest-degradation note below |
@@ -156,6 +158,7 @@ upgrades. A matching override **replaces the whole `config`** — write every fi
 | `titleCacheTtlMs` | `300000` | title-fold cache TTL; `0` disables |
 | `titleFetchConcurrency` | `8` | shard concurrency when folding titles |
 | `titleLimit` | `100` | max rows per page to fold titles for; `0` skips title reading |
+| `titleSearchLimit` | `40` | separate title budget for keyword search (independent of `titleLimit`); rows beyond it are reported in `titles.truncated` |
 | `runningProbeTtlMs` | `1000` | how long a running-state snapshot is reused. Turns batch delete from O(N) full-corpus list calls into O(1); `0` re-probes every item |
 
 ## Honest limitations
@@ -202,8 +205,8 @@ node scripts/render-shot.mjs
 > `test/*.test.mjs` itself and hands the list to `node --test`, so all three Node versions
 > and both platforms behave identically (covered by CI).
 
-The suites are currently **248 tests across 14 files** (3 of them are platform-specific, so
-each platform actually runs 245):
+The suites are currently **278 tests across 17 files** (3 of them are platform-specific, so
+each platform actually runs 275):
 
 | Suite | Covers |
 |---|---|
@@ -221,6 +224,9 @@ each platform actually runs 245):
 | `eol.test.mjs` | line endings, and that every tracked file is git-declared `eol=lf` |
 | `release-workflow.test.mjs` | the OIDC publishing structure (**reverse assertion**: `pack-release.yml` must not contain its own publish steps) |
 | `ps-script.test.mjs` | PowerShell 5.1 BOM / encoding pitfalls |
+| `project-identity.test.mjs` | a row's project identity is **one field**: display, filtering and the dropdown are all derived from it (cwd when present, else the workspace path); case/separator variants collapse into one option |
+| `transaction-boundary.test.mjs` | delete × concurrency boundaries: a title read in flight, a batch with one refused and one malformed id, audit in flight / failing, and the three projection-cache states (normal / symlink fail-closed / root path anomaly) |
+| `title-async-prototype.test.mjs` | **a prototype, not a production path**: the reference merge state machine from `docs/TITLE-ASYNC-DESIGN.md`, checked against a gate-controlled fake host (first paint unblocked, no stuck `pending`, late token rejected, deleted row not resurrected, `empty` ≠ `unreadable`) |
 
 Two of these exist because the corresponding bug actually shipped and was caught afterwards:
 

@@ -189,7 +189,7 @@ gh workflow run pack-release.yml --repo Winnie-0721/dsh-dialogue-cleanup --ref m
 ## 7. 发版前跑一遍
 
 ```powershell
-pwsh -File scripts\release.ps1 -LocalOnly      # 全套门禁（含 238 条测试）
+pwsh -File scripts\release.ps1 -LocalOnly      # 全套门禁（含 278 条测试）
 node test/release-workflow.test.mjs            # 只跑发布工作流回归
 node test/mutate-tokens-official.mjs           # 变异测试：必须 survived 0
 ```
