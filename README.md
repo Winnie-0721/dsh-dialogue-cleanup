@@ -155,6 +155,7 @@ upgrades. A matching override **replaces the whole `config`** — write every fi
 | `removeProjectionCache` | `true` | also drop the derived projection cache |
 | `clearRegistryRecords` | `true` | unpin / unarchive leftovers |
 | `confirmInUi` | `true` | UI confirmation (the Host does not trust it) |
+| `announceRemoval` | `true` | emit `session.removed` after deletion so other views drop the row |
 | `titleCacheTtlMs` | `300000` | title-fold cache TTL; `0` disables |
 | `titleFetchConcurrency` | `8` | shard concurrency when folding titles |
 | `titleLimit` | `100` | max rows per page to fold titles for; `0` skips title reading |

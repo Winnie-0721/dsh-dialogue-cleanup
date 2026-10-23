@@ -176,6 +176,7 @@ DSH 本身有内核级会话写锁（`SessionWriteLease`，Windows 命名信号�
 | `removeProjectionCache` | `true` | 同时删掉派生的投影缓存 |
 | `clearRegistryRecords` | `true` | 解除 pin / archive 残留 |
 | `confirmInUi` | `true` | UI 确认（宿主不信任它） |
+| `announceRemoval` | `true` | 删除后广播 `session.removed`，让别的视图同步移除该行 |
 | `titleCacheTtlMs` | `300000` | 标题折叠缓存 TTL；`0` 关闭 |
 | `titleFetchConcurrency` | `8` | 折叠标题时的分片并发 |
 | `titleLimit` | `100` | 每页最多为多少行折叠标题；`0` 完全跳过标题读取 |
