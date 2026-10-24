@@ -1209,3 +1209,118 @@ test("布局 CSS：筛选网格标签列与控件列都定宽，行内容可省�
   const rowRules = [...sheet.matchAll(/\.dscc-row[\w-]*\s*\{([^}]*)\}/g)].map((m) => m[1]);
   assert.equal(rowRules.some((b) => /break-all/.test(b)), false, "卡片行不得使用 break-all");
 });
+
+/**
+ * 【TASK-CLASSIFICATION-01 回归】身份未知的行必须在界面上**看得出来**。
+ *
+ * 为什么单独一条：`unknown` 行的成因是「宿主没给出身份证据」（例如该行只出现在
+ * 摘要兜底链路里），它既不是主会话也不是子代理。如果界面上没有任何标记，用户在
+ * 默认视图里就会把它当主会话删掉 —— 这正是本任务要修的用户可见故障。
+ * 这里不验样式细节，只钉两件事：
+ *   1. 未知行渲染出「未知」徽标（且主会话行**不得**出现该徽标，否则等于全行都未知）；
+ *   2. 会话类型选择器真的提供**四选一**（main / subagent / unknown / all）。
+ */
+test("渲染：身份未知的行显示「未知」徽标，且会话类型提供四选一", async () => {
+  const baseRow = {
+    title: "示例会话",
+    project: "E:\\proj",
+    workspaceTitle: "proj",
+    running: false,
+    blank: false,
+    live: true,
+    persisted: true,
+    archived: false,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-02T00:00:00.000Z",
+    deletable: true,
+    blockedReason: null,
+  };
+  const listBody = {
+    ok: true,
+    value: {
+      total: 2,
+      page: { page: 1, pageSize: 50, pages: 1 },
+      items: [
+        { ...baseRow, sessionId: "s-main", subagent: false, classification: "main", classificationSource: "corpus" },
+        {
+          ...baseRow,
+          sessionId: "s-unknown",
+          title: null,
+          project: null,
+          workspaceTitle: null,
+          subagent: false,
+          classification: "unknown",
+          classificationSource: "summary",
+        },
+      ],
+      projects: ["E:\\proj"],
+      archived: { filter: "default", total: 0, known: true, subagentTotal: 0 },
+      kind: { filter: "all", mainTotal: 1, subagentTotal: 0, unknownTotal: 1 },
+      titles: { requested: 2, cached: 0, fetched: 2, failed: 0, truncated: 0, skipped: false },
+      tookMs: 1,
+    },
+  };
+  const app = boot({
+    hostActive: "zh",
+    fetchImpl: async () => ({ status: 200, json: async () => listBody }),
+  });
+  const entry = app.byName.get(SECTION_SLOT);
+  const paint = () => {
+    app.beginRender();
+    return app.render(app.React.createElement(entry.component, { close: () => {} }));
+  };
+
+  paint();
+  app.flushEffects();
+  await new Promise((r) => setTimeout(r, 0));
+  const tree = paint();
+  app.flushEffects();
+
+  const rows = [];
+  (function walk(node) {
+    if (node === null || node === undefined || typeof node !== "object") return;
+    if (Array.isArray(node)) { node.forEach(walk); return; }
+    const cls = typeof node.props?.className === "string" ? node.props.className.split(/\s+/) : [];
+    if (cls.includes("dscc-row")) rows.push(node);
+    for (const c of node.children ?? []) walk(c);
+  })(tree);
+  assert.equal(rows.length, 2, `必须渲染出两行，实际 ${rows.length}`);
+
+  const rowTexts = rows.map((r) => collectText(r).join(" "));
+  const unknownRow = rowTexts.find((x) => /s-unknown|未知/.test(x));
+  assert.ok(unknownRow, `必须有一行是未知行，实际行文本：${rowTexts.join(" | ")}`);
+  assert.match(unknownRow, /未知/, "未知行必须渲染出「未知」徽标（否则用户会当主会话删掉）");
+  const mainRow = rowTexts.find((x) => x !== unknownRow);
+  assert.doesNotMatch(mainRow, /未知/, `主会话行不得出现「未知」徽标，实际：${mainRow}`);
+  assert.doesNotMatch(mainRow, /子代理/, `主会话行不得出现「子代理」徽标，实际：${mainRow}`);
+
+  // 徽标必须挂自己的类（.dscc-badge-unknown），不能借用 subagent 的样式。
+  const badgeCls = [];
+  (function walk(node) {
+    if (node === null || node === undefined || typeof node !== "object") return;
+    if (Array.isArray(node)) { node.forEach(walk); return; }
+    const cls = typeof node.props?.className === "string" ? node.props.className : "";
+    if (cls.includes("dscc-badge")) badgeCls.push(cls);
+    for (const c of node.children ?? []) walk(c);
+  })(tree);
+  assert.ok(
+    badgeCls.some((c) => c.includes("dscc-badge-unknown")),
+    `未知徽标必须用 dscc-badge-unknown 类，实际徽标类：${badgeCls.join(" | ")}`,
+  );
+
+  // 四选一：main / subagent / unknown / all
+  const kindField = filterFields(app, tree).find((f) => f.label === "会话类型");
+  assert.ok(kindField, "必须渲染出「会话类型」筛选字段");
+  const opened = openDropdown(app, kindField);
+  assert.ok(opened.menu, "点击药丸必须展开下拉");
+  const items = (opened.menu.children ?? []).filter(
+    (c) => typeof c?.props?.className === "string" && c.props.className.includes("dscc-menu-item"),
+  );
+  assert.equal(items.length, 4, "会话类型必须四选一（main / subagent / unknown / all）");
+  const itemTexts = items.map((c) => collectText(c).join(""));
+  const joined = itemTexts.join(" | ");
+  assert.match(joined, /主会话/, `缺少主会话选项：${joined}`);
+  assert.match(joined, /子代理/, `缺箱子代理选项：${joined}`);
+  assert.match(joined, /未知/, `缺少未知选项：${joined}`);
+  assert.match(joined, /全部/, `缺少全部选项：${joined}`);
+});
