@@ -146,11 +146,11 @@ window.__ModuleLoader__.load({
         "panel.subagentRow": "子代理",
         "panel.unknownRow": "未知",
         "panel.unknownRowHint": "宿主没有给出足够的身份证据，无法确定这是主会话还是子代理会话。",
-        "panel.noTitle": "（无标题）",
-        // 【三态占位文案】`title: null` 有两种完全不同的成因，必须分开说：
+        // 【四态占位文案】`title: null` 有三种完全不同的成因，必须分开说：
         //   · 空会话 —— 从未收到过用户消息，它本来就不会有标题（占 78%：254 条里 199 条）；
-        //   · 未取到 —— 是正常会话，只是这次没取到标题（预算外/读取失败）。
-        // 以前两者都显示「（无标题）」，用户会以为有 200 多个坏会话。
+        //   · 无标题 —— 有内容，但宿主翻完日志确认没有标题（重试无用）；
+        //   · 未取到 —— 是正常会话，只是这次没取到标题（预算外/读取失败，重试可能有用）。
+        // 以前三者都显示同一句话，用户会以为有 200 多个坏会话。
         // 注意措辞：占位文案里不得出现「标题未读」这个子串 —— 它是分页条上
         // 「另有 N 行标题未读」警告的专属标志，两者混淆会让「truncated=0 时不得报警」
         // 的回归测试失去意义（test/render.test.mjs 靠这个子串判断）。
@@ -275,8 +275,7 @@ window.__ModuleLoader__.load({
         "panel.subagentRow": "Subagent",
         "panel.unknownRow": "Unknown",
         "panel.unknownRowHint": "The host did not provide enough identity evidence to tell whether this is a main session or a subagent session.",
-        "panel.noTitle": "(untitled)",
-        // See the zh comment: a null title has two very different causes.
+        // See the zh comment: a null title has three very different causes.
         // Wording note: these must NOT contain the substring "title not read" —
         // that string is the pager's "N rows without titles" warning marker.
         "panel.titleBlank": "(blank session, no messages)",
