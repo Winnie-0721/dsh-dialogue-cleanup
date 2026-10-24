@@ -115,10 +115,18 @@ test("PERF-03 C-2：过滤、排序、分页语义不变", async () => {
   assert.ok(sub.value.items.every((i) => i.subagent === true), "kind=subagent 必须只含子代理行");
   const main = await svc.listSessions({ kind: "main", pageSize: 200 });
   assert.ok(main.value.items.every((i) => i.subagent !== true), "kind=main 必须只含主会话");
+  // 【TASK-CLASSIFICATION-01】三分类而不只是两类：身份未知的行既不是子代理
+  // 也不是主会话，必须单独成一档。所以这里的恒等式是三档之和 = all，
+  // 而且 main 视图不得包含任何 unknown 行（否则就是「未分类会话混进主会话」）。
+  const unknown = await svc.listSessions({ kind: "unknown", pageSize: 200 });
+  assert.ok(
+    unknown.value.items.every((i) => i.classification === "unknown"),
+    "kind=unknown 必须只含身份未知行",
+  );
   assert.equal(
-    sub.value.total + main.value.total,
+    sub.value.total + main.value.total + unknown.value.total,
     await svc.listSessions({ kind: "all", pageSize: 200 }).then((r) => r.value.total),
-    "subagent + main 必须等于 all",
+    "subagent + main + unknown 必须等于 all（三分类互斥且完备）",
   );
 });
 

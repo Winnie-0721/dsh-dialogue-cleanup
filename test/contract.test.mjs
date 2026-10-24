@@ -878,7 +878,19 @@ test("listSessions：任一数据源失败不影响另一个（并行后降级�
   assert.equal(result.ok, true, "语料失败不应让整个请求失败");
   assert.equal(result.value.sources.corpus, "none", "语料来源如实记为 none");
   assert.equal(result.value.sources.summary, "sessionController.list", "摘要仍应生效");
-  assert.equal(result.value.items[0].sessionId, "s-x");
+
+  // 【TASK-CLASSIFICATION-01】语料挂了以后，摘要行**没有身份证据**（摘要不透出
+  // delegationDepth），因此不能当主会话 —— 默认 kind=main 必须为空，行只出现在
+  // kind=all / kind=unknown 里。这是「降级语义不变」与「身份未知不得冒充主会话」
+  // 两条约束的交点：行不丢，但不能混进主视图。
+  assert.equal(result.value.total, 0, "身份未知的行不得出现在默认主会话视图里");
+  assert.equal(result.value.items.length, 0);
+
+  const all = await service.listSessions({ kind: "all", pageSize: 10 });
+  assert.equal(all.value.items[0].sessionId, "s-x", "kind=all 里必须仍然列出该行（不得丢行）");
+  assert.equal(all.value.items[0].classification, "unknown", "语料缺失 ⇒ 身份未知");
+  assert.equal(all.value.items[0].classificationSource, "summary");
+  assert.equal(all.value.kind.unknownTotal, 1, "未知计数如实上报");
 });
 
 test("listSessions：titleLimit=0 时完全不取标题（最快路径）", async () => {
@@ -1199,8 +1211,17 @@ test("listSessions：sessionQuery 缺失时降级到 sessionController（不报�
   assert.equal(result.ok, true);
   assert.equal(result.value.sources.corpus, "none");
   assert.equal(result.value.sources.summary, "sessionController.list");
-  assert.equal(result.value.total, 1);
-  assert.equal(result.value.items[0].sessionId, "s1");
+
+  // 【TASK-CLASSIFICATION-01】sessionQuery 完全没有 ⇒ 只剩摘要 ⇒ 身份未知。
+  // 行不能丢（那是静默丢数据），但也不得冒充主会话（那是删错会话的诱因）。
+  assert.equal(result.value.total, 0, "身份未知的行不得出现在默认主会话视图里");
+
+  const all = await service.listSessions({ kind: "all" });
+  assert.equal(all.value.total, 1, "kind=all 必须仍然列出该行");
+  assert.equal(all.value.items[0].sessionId, "s1");
+  assert.equal(all.value.items[0].classification, "unknown");
+  assert.equal(all.value.kind.unknownTotal, 1);
+  assert.equal(all.value.kind.mainTotal, 0);
 });
 
 test("listSessions：两个服务都缺失时给出 cleanup-unavailable（不假装空清单）", async () => {
