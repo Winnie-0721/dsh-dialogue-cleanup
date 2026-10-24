@@ -147,6 +147,19 @@ window.__ModuleLoader__.load({
         "panel.unknownRow": "未知",
         "panel.unknownRowHint": "宿主没有给出足够的身份证据，无法确定这是主会话还是子代理会话。",
         "panel.noTitle": "（无标题）",
+        // 【三态占位文案】`title: null` 有两种完全不同的成因，必须分开说：
+        //   · 空会话 —— 从未收到过用户消息，它本来就不会有标题（占 78%：254 条里 199 条）；
+        //   · 未取到 —— 是正常会话，只是这次没取到标题（预算外/读取失败）。
+        // 以前两者都显示「（无标题）」，用户会以为有 200 多个坏会话。
+        // 注意措辞：占位文案里不得出现「标题未读」这个子串 —— 它是分页条上
+        // 「另有 N 行标题未读」警告的专属标志，两者混淆会让「truncated=0 时不得报警」
+        // 的回归测试失去意义（test/render.test.mjs 靠这个子串判断）。
+        "panel.titleBlank": "（空会话，无消息）",
+        "panel.titleBlankHint": "这条会话从未收到过任何用户消息，因此不会有标题。可以安全删除。",
+        "panel.titleEmpty": "（无标题）",
+        "panel.titleEmptyHint": "这条会话有内容，但宿主的日志里确实没有标题记录（例如只跑了一轮子代理任务）。重试不会改变结果。",
+        "panel.titleUnread": "（未取到标题）",
+        "panel.titleUnreadHint": "这是有内容的会话，只是本次没有取到标题（超出单次标题预算或读取失败）。刷新或翻页可重试。",
         "panel.busy": "处理中 {done}/{total}…",
         "panel.resultTitle": "批量删除结果",
         "panel.resultOk": "成功 {ok} 个",
@@ -263,6 +276,15 @@ window.__ModuleLoader__.load({
         "panel.unknownRow": "Unknown",
         "panel.unknownRowHint": "The host did not provide enough identity evidence to tell whether this is a main session or a subagent session.",
         "panel.noTitle": "(untitled)",
+        // See the zh comment: a null title has two very different causes.
+        // Wording note: these must NOT contain the substring "title not read" —
+        // that string is the pager's "N rows without titles" warning marker.
+        "panel.titleBlank": "(blank session, no messages)",
+        "panel.titleBlankHint": "This session never received a user message, so it has no title. It is safe to delete.",
+        "panel.titleEmpty": "(no title)",
+        "panel.titleEmptyHint": "This session has content, but the host log really contains no title record (for example a one-turn subagent job). Retrying will not change that.",
+        "panel.titleUnread": "(title unavailable)",
+        "panel.titleUnreadHint": "This session has content; its title was not fetched this time (over the per-request title budget or the read failed). Refresh or page again to retry.",
         "panel.busy": "Working {done}/{total}…",
         "panel.resultTitle": "Bulk delete result",
         "panel.resultOk": "{ok} succeeded",
@@ -784,6 +806,14 @@ window.__ModuleLoader__.load({
   font-size: 14px; line-height: 20px; font-weight: 500;
   color: var(--dsw-alias-label-primary);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* 占位标题（空会话 / 未取到标题）：这不是真标题，降一档字号与颜色 + 斜体，
+   让人一眼看出「这里没有标题」而不是「标题叫（无标题）」。
+   注意：本样式表会被当作文本节点渲染，所以注释里不要写分页条警告用的那几个字
+   （它在 test/render.test.mjs 里是「是否出现不完整警告」的判据，注释泄漏会误判）。 */
+.dscc-row-title-empty {
+  font-size: 13px; font-weight: 400; font-style: italic;
+  color: var(--dsw-alias-label-tertiary);
 }
 /* 官方卡片描述：12px-18px + label-tertiary。 */
 .dscc-row-meta {
@@ -1872,6 +1902,51 @@ window.__ModuleLoader__.load({
       return h("span", { className: "dscc-badge dscc-badge-outline" }, t("panel.blocked"));
     }
 
+    /**
+     * 标题列的显示文案（四态）。
+     *
+     * `row.title` 有值就是标题本身。`null` 必须再分三种：
+     *   · `titleState === "blank"` —— 宿主说这条会话 `blank: true`，从未有过用户消息；
+     *   · `titleState === "empty"` —— 有内容，宿主**明确答复过没有标题**（重试无用）；
+     *   · `titleState === "unread"`（或旧宿主没给 `titleState`）—— 有内容但没读到（可重试）。
+     * 「empty」与「unread」分开是必须的：前者刷新一百次也一样，后者刷新一下可能就有；
+     * 混成一个文案会让用户对着永远不会有标题的行反复重试，也会把真实的读取失败
+     * 伪装成「这条会话本来就没标题」。
+     * 旧宿主不回 `titleState` 时退化成 `blank` 判断（与修复前的信息量一致，
+     * 不会因为字段缺失把「空会话」误报成「读取失败」）。
+     */
+    function titleText(row, t) {
+      if (row.title !== null && row.title !== "") return row.title;
+      if (row.titleState === "blank" || (row.titleState === undefined && row.blank === true)) {
+        return t("panel.titleBlank");
+      }
+      if (row.titleState === "empty") return t("panel.titleEmpty");
+      return t("panel.titleUnread");
+    }
+
+    function titleHint(row, t) {
+      if (row.title !== null && row.title !== "") return row.title;
+      if (row.titleState === "blank" || (row.titleState === undefined && row.blank === true)) {
+        return t("panel.titleBlankHint");
+      }
+      if (row.titleState === "empty") return t("panel.titleEmptyHint");
+      return t("panel.titleUnreadHint");
+    }
+
+    /**
+     * 无标题行是否要显示会话 id。
+     *
+     * 规则：**有标题 → 不显示**（标题就是身份）；**有内容但没读到标题 → 显示**
+     * （它是一条真会话，用户得能核对是哪一条）；**空会话 → 不显示**
+     * （它本来就没有标题，实测占 78%，全印 UUID 会把真会话淹掉）；
+     * **确认无标题（empty）→ 显示** —— 它和 unread 一样是「有内容的真会话」，
+     * 删错了代价一样大，所以同样要靠 id 核对。两者只在文案与提示上区分。
+     */
+    function showRowId(row, t) {
+      if (row.title !== null && row.title !== "") return false;
+      return titleText(row, t) !== t("panel.titleBlank");
+    }
+
     /** 时间戳的人类可读显示（本地化用 toLocaleString，失败回退原串）。 */
     function formatTime(value) {
       if (typeof value !== "string" || value === "") return "—";
@@ -2264,8 +2339,16 @@ window.__ModuleLoader__.load({
                 { className: "dscc-row-main" },
                 h(
                   "div",
-                  { className: "dscc-row-title", title: row.title || t("panel.noTitle") },
-                  row.title || t("panel.noTitle"),
+                  // 【三态文案】空会话与「读不到标题」必须长得不一样，见 titleText 注释。
+                  // 占位态用 dscc-row-title-empty 降一档字重/颜色，避免和真标题抢注意力。
+                  {
+                    className:
+                      row.title === null || row.title === ""
+                        ? "dscc-row-title dscc-row-title-empty"
+                        : "dscc-row-title",
+                    title: titleHint(row, t),
+                  },
+                  titleText(row, t),
                 ),
                 h(
                   "div",
@@ -2279,8 +2362,11 @@ window.__ModuleLoader__.load({
                   // 【例外】没有标题的行，id 就是它唯一的身份 —— 这时必须显示，
                   // 否则同一个项目里几条空标题会话在视觉上完全无法区分
                   // （而这是一个**不可逆的删除**界面，认错了行代价很大）。
-                  row.title ? null : h("code", { className: "dscc-row-id" }, row.sessionId),
-                  row.title ? null : h("span", { className: "dscc-row-sep" }, "·"),
+                  // 但**空会话不显示 id**：它本来就不该有标题（实测 199/254 都是这种），
+                  // 给 199 行各印一串 36 字符 UUID 只会把真会话淹掉，而它们靠
+                  // 「时间 + 项目」已足以区分（同秒创建的极端情况下仍可从悬停提示取 id）。
+                  showRowId(row, t) ? h("code", { className: "dscc-row-id" }, row.sessionId) : null,
+                  showRowId(row, t) ? h("span", { className: "dscc-row-sep" }, "·") : null,
                   row.project ?? "—",
                   h("span", { className: "dscc-row-sep" }, "·"),
                   formatTime(row.updatedAt ?? row.createdAt),

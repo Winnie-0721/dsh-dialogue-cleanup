@@ -986,22 +986,42 @@ test("渲染：标题预算外（truncated>0）必须显示「结果可能不完
 });
 
 /**
- * 【会话 id 的显示策略】有标题的行不显示 id，无标题的行必须显示。
+ * 【会话 id 的显示策略】有标题 → 不显示；有内容但没取到标题 → 必须显示；空会话 → 不显示。
  *
  * 用户反馈：那串 36 字符的 UUID「在哪都能看到、貌似没有显示的必要」。
  * 确实——它读不了、没法用，还把标题挤掉半行。所以从常规行里去掉，
  * 保留在悬停提示（title）里，需要核对身份时鼠标停上去就有。
  *
- * 但有一个例外必须守住：**没有标题的会话，id 就是它唯一的身份**。
- * 本面板是**不可逆的删除**界面，同一个项目里几条空标题会话如果
+ * 例外一：**有内容但没有标题的会话，id 就是它唯一的身份**。
+ * 本面板是**不可逆的删除**界面，同一个项目里几条无标题会话如果
  * 视觉上完全一样，用户就没法复核自己勾的是哪一条 —— 认错行代价很大。
- * 所以无标题行仍显示 id。这条测试同时钉住「去掉」和「例外」两半，
- * 防止以后有人把条件简化成「一律不显示」。
+ * 所以「未取到标题」的行仍显示 id。
+ *
+ * 例外二（后来补的）：**空会话不显示 id**。宿主 `blank: true` 表示这条会话
+ * 从未收到过用户消息，它本来就不该有标题（实测 254 条里 199 条属此类）。
+ * 给 199 行各印一串 UUID 只会把真会话淹掉，而它们靠「时间 + 项目」已足够区分。
+ *
+ * 这条测试同时钉住三半（去掉 / 例外一 / 例外二），
+ * 防止以后有人把条件简化成「一律显示」或「一律不显示」。
  */
-test("渲染：有标题的行不显示会话 id，无标题的行必须显示", async () => {
+/**
+ * 标题占位四态：`ready` / `blank` / `empty` / `unread`。
+ *
+ * 之前 `title: null` 只有一种渲染（「（无标题）」），把三件不同的事混成一件：
+ *   · blank  —— 宿主说从未有用户消息（日志只有初始化事件），本来就不该有标题；
+ *   · empty  —— 有内容，但宿主明确答复「没有标题」（翻完日志也没有 session/title，
+ *               例如只跑了 turn/start→turn/end 的子代理会话）。
+ *               **刷新一百次也一样**，所以文案必须与 unread 区分，不能让用户白试；
+ *   · unread —— 有内容，本次没读到（超预算或读失败），**刷新可能就好了**。
+ * 混成一个「（无标题）」，等于把「真的没有」和「没读到」一起撒谎。
+ *
+ * 本测试钉住四态的**两两可区分**：每两条的占位文案必须不同。
+ */
+test("渲染：标题占位四态两两可区分（ready / blank / empty / unread）", async () => {
   const rowOf = (over) => ({
     sessionId: "session-5a449d65-f46a-4451-bf6d-e40f4a266ecd",
     title: "论文",
+    titleState: "ready",
     project: "E:\\AI\\DeepSeek Ha",
     workspaceTitle: "DeepSeek",
     running: false,
@@ -1019,13 +1039,18 @@ test("渲染：有标题的行不显示会话 id，无标题的行必须显示",
   const listBody = {
     ok: true,
     value: {
-      total: 2,
+      total: 4,
       page: { page: 1, pageSize: 50, pages: 1 },
-      items: [rowOf({}), rowOf({ sessionId: "session-00000000-1111-2222-3333-444444444444", title: "" })],
+      items: [
+        rowOf({}),
+        rowOf({ sessionId: "session-bbbb0000-1111-2222-3333-444444444444", title: null, titleState: "blank", blank: true }),
+        rowOf({ sessionId: "session-cccc0000-1111-2222-3333-444444444444", title: null, titleState: "empty", blank: false }),
+        rowOf({ sessionId: "session-dddd0000-1111-2222-3333-444444444444", title: "", titleState: "unread", blank: false }),
+      ],
       projects: ["E:\\AI\\DeepSeek Ha"],
       archived: { filter: "show", total: 0, known: true, subagentTotal: 0 },
-      kind: { filter: "main", subagentTotal: 0, mainTotal: 2 },
-      titles: { requested: 2, cached: 0, fetched: 2, failed: 0, truncated: 0, skipped: false },
+      kind: { filter: "main", subagentTotal: 0, mainTotal: 4 },
+      titles: { requested: 4, cached: 0, fetched: 4, failed: 0, truncated: 0, skipped: false },
       tookMs: 1,
     },
   };
@@ -1048,17 +1073,30 @@ test("渲染：有标题的行不显示会话 id，无标题的行必须显示",
     if (cls.includes("dscc-row")) rows.push(node);
     for (const c of node.children ?? []) walk(c);
   })(tree);
-  assert.equal(rows.length, 2, "必须渲染出两行");
+  assert.equal(rows.length, 4, "必须渲染出四行");
 
   const texts = rows.map((r) => collectText(r).join(" "));
-  // 有标题的行：正文里不得出现那串 id。
-  assert.ok(!texts[0].includes("5a449d65"), `有标题的行不该显示会话 id，实际：${texts[0]}`);
-  assert.match(texts[0], /论文/, "有标题的行必须显示标题");
-  // 无标题的行：必须显示 id（否则与同项目其它空标题行无法区分）。
-  assert.ok(texts[1].includes("00000000"), `无标题的行必须显示会话 id，实际：${texts[1]}`);
-  assert.match(texts[1], /无标题/, "无标题的行要有占位标题文案");
 
-  // 但 id 并没有丢：两行的悬停提示里都还在。
+  // ① ready：显示真标题，不印 id。
+  assert.match(texts[0], /论文/, "ready 必须显示标题");
+  assert.ok(!texts[0].includes("5a449d65"), `ready 不该显示 id，实际：${texts[0]}`);
+
+  // ②③④ 三种占位必须**两两不同** —— 这是本测试的核心。
+  assert.match(texts[1], /空会话/, "blank 要说「空会话」");
+  assert.match(texts[2], /无标题/, "empty 要说「无标题」");
+  assert.match(texts[3], /未取到标题/, "unread 要说「未取到标题」");
+  assert.notStrictEqual(texts[1].trim(), texts[2].trim(), "blank 与 empty 的文案不能一样");
+  assert.notStrictEqual(texts[2].trim(), texts[3].trim(), "empty 与 unread 的文案不能一样");
+  assert.notStrictEqual(texts[1].trim(), texts[3].trim(), "blank 与 unread 的文案不能一样");
+  // empty 的文案里尤其不能出现 unread 那句，否则用户会照着它反复刷新。
+  assert.ok(!texts[2].includes("未取到标题"), `empty 不得复用 unread 的文案，实际：${texts[2]}`);
+
+  // id 策略：blank 不印（199/254 会把真会话淹掉），empty / unread 都要印（都是真会话，删错代价一样大）。
+  assert.ok(!texts[1].includes("bbbb0000"), `blank 不该显示会话 id，实际：${texts[1]}`);
+  assert.ok(texts[2].includes("cccc0000"), `empty 必须显示会话 id，实际：${texts[2]}`);
+  assert.ok(texts[3].includes("dddd0000"), `unread 必须显示会话 id，实际：${texts[3]}`);
+
+  // 但 id 并没有丢：四行的悬停提示里都还在。
   const metas = rows.map((r) => {
     let meta = null;
     (function walk(node) {
@@ -1070,7 +1108,17 @@ test("渲染：有标题的行不显示会话 id，无标题的行必须显示",
     })(r);
     return meta;
   });
-  assert.match(String(metas[0].props.title), /5a449d65/, "有标题的行必须能在悬停提示里看到 id");
+  assert.match(String(metas[0].props.title), /5a449d65/, "ready 的悬停提示里必须有 id");
+  assert.match(String(metas[1].props.title), /bbbb0000/, "blank 的悬停提示里必须有 id");
+  assert.match(String(metas[2].props.title), /cccc0000/, "empty 的悬停提示里必须有 id");
+  assert.match(String(metas[3].props.title), /dddd0000/, "unread 的悬停提示里必须有 id");
+
+  // 悬停提示也要能解释「为什么没有标题」——empty 与 unread 的提示必须不同。
+  assert.notStrictEqual(
+    String(metas[2].props.title),
+    String(metas[3].props.title),
+    "empty 与 unread 的悬停解释不能一样",
+  );
 });
 
 /** 上面用到 await0 只是为了保持同步；这里做 CSS 层的断言（读源码文本）。 */
