@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+### 修复：会话分类三态化 —— 身份未知不得再被默认当成主会话
+
+主会话筛选下曾出现「无法判断身份」的会话行，根因是两条独立路径都把**缺失证据**读成了
+**不是子代理**：
+
+- **service 层**：摘要循环的兜底分支（摘要里有、语料里没有的行）建行时没有写任何身份
+  证据字段，而主视图判据是 `row.subagent !== true` —— `undefined !== true` 恒真，未知行
+  就这样进了主视图。
+- **HTTP 边界层**：`lib/index.js` 的 `kind` 取值白名单只认 `main|subagent|all`，新增的
+  `unknown` 在读查询串阶段被静默丢弃，service 收到 `undefined` 后按 `main` 兜底 —— 界面上
+  点了「身份未知」，返回的是一整页主会话（真实宿主验收发现的，单测全绿却在真机上失效）。
+
+改动：语料侧与摘要侧**只记原始证据**（`origin` / `parentSession[Id]` / `delegationDepth`），
+判定集中在 `hasSubagentEvidence`（三项证据**任一**成立即子代理），然后三态落定 ——
+`subagent`（任一侧有证据）、`main`（无证据且在语料里）、`unknown`（无证据且只在摘要里）。
+**证据只累加不相减**：摘要行缺 `delegationDepth` 是因为宿主契约（`listFields()` 条件展开）
+根本不透出该字段，缺失不构成反证，因此不存在「冲突」状态（曾实现的 `source='conflict'`
+分支被 `test/project-identity.test.mjs:311` 的组合用例证伪后删除）。
+
+`/list` 新增 `classification`（`main|subagent|unknown`）与 `classificationSource`
+（`corpus|summary|corpus+summary`）；`kind` 支持 `unknown` 并保留 `main|subagent|all`；
+计数改为 `mainTotal` / `subagentTotal` / `unknownTotal` 三档（不再用「总数 − 子代理数」
+算主会话，那种减法会把未知吞进主会话）。兼容字段 `subagent` 改为
+`classification === 'subagent'` —— 未知既不是子代理也不是主会话。
+
+`lib/index.js` 把 GET 查询串与 POST 请求体两处白名单合并为同一份 `KIND_VALUES`，
+避免「新增取值只改一处」的复发。
+
+界面：会话类型四选一（主会话 / 子代理 / **身份未知** / 全部），未知行有独立徽标与说明
+（「宿主没有给出足够的身份证据」），并明确「未知 ≠ 不可删除」。前端**不做任何二次猜测**，
+只渲染后端给出的分类。
+
+测试：新增 `test/classification.test.mjs`（15 例，修复前 12 例失败作为证据），其中一条是
+**handler 级**用例 —— 直接 `apply()` 注册路由并断言 `GET /list?kind=unknown` 回显
+`filter=unknown`，专门钉住上面第二条路径。
+
 ### 修复：项目身份字段统一 —— 显示、筛选、下拉选项同源
 
 `/list` 以前用两个不同的字段算同一件事：显示用 `workspace.path`，筛选用 `row.cwd`。

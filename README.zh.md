@@ -244,7 +244,7 @@ node scripts/render-shot.mjs
 > `Could not find '.../test/**/*.test.mjs'`。`scripts/run-tests.mjs` 由 Node 自己枚举
 > `test/*.test.mjs` 再交给 `node --test`，三个版本、两个平台行为一致（CI 已覆盖）。
 
-当前共 **278 条测试 / 17 个文件**（其中 3 条是平台相关用例，每个平台实际跑 275 条）：
+当前共 **294 条测试 / 18 个文件**（其中 3 条是平台相关用例，每个平台实际跑 291 条）：
 
 | 套件 | 覆盖 |
 |---|---|
@@ -265,6 +265,7 @@ node scripts/render-shot.mjs
 | `project-identity.test.mjs` | 一行的项目身份是**同一个字段**：显示、筛选、下拉选项全部由它派生（有 cwd 用 cwd，否则退回 workspace 路径）；大小写/分隔符变体合并成一个选项 |
 | `transaction-boundary.test.mjs` | 删除与并发的交界：标题读取在途、批量里一条被拒 + 一条非法 id、审计在途/失败、投影缓存三态（正常 / 符号链接 fail-closed / 根路径异常） |
 | `title-async-prototype.test.mjs` | **原型，不是生产路径**：`docs/TITLE-ASYNC-DESIGN.md` 的参考合并状态机，对「可控闸门」的假宿主验证（首屏不阻塞、不卡 pending、旧 token 被拒、已删行不复活、`empty` ≠ `unreadable`） |
+| `classification.test.mjs` | 会话**分类三态**：只出现在摘要链路上的行必须回成 `unknown`，绝不能再算主会话；证据只累加不相减（字段缺失不是反证）；另有一条 handler 级用例钉住 `GET /list?kind=unknown` 穿透 HTTP 白名单 |
 
 另有 `test/integration-real.mjs`（**只读**真实 DSH 检查，需要活着的宿主，故不并入
 `*.test.mjs` 套件）与 `test/mutate-tokens-official.mjs`（变异测试，要求 survived=0）。

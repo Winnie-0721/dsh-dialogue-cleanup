@@ -206,8 +206,8 @@ node scripts/render-shot.mjs
 > `test/*.test.mjs` itself and hands the list to `node --test`, so all three Node versions
 > and both platforms behave identically (covered by CI).
 
-The suites are currently **278 tests across 17 files** (3 of them are platform-specific, so
-each platform actually runs 275):
+The suites are currently **294 tests across 18 files** (3 of them are platform-specific, so
+each platform actually runs 291):
 
 | Suite | Covers |
 |---|---|
@@ -228,6 +228,7 @@ each platform actually runs 275):
 | `project-identity.test.mjs` | a row's project identity is **one field**: display, filtering and the dropdown are all derived from it (cwd when present, else the workspace path); case/separator variants collapse into one option |
 | `transaction-boundary.test.mjs` | delete × concurrency boundaries: a title read in flight, a batch with one refused and one malformed id, audit in flight / failing, and the three projection-cache states (normal / symlink fail-closed / root path anomaly) |
 | `title-async-prototype.test.mjs` | **a prototype, not a production path**: the reference merge state machine from `docs/TITLE-ASYNC-DESIGN.md`, checked against a gate-controlled fake host (first paint unblocked, no stuck `pending`, late token rejected, deleted row not resurrected, `empty` ≠ `unreadable`) |
+| `classification.test.mjs` | session **classification** is three-state: a row seen only in the summary path must come back as `unknown`, never as `main`; evidence only accumulates (a missing field is not a counter-proof); plus a handler-level case pinning `GET /list?kind=unknown` through the HTTP whitelist |
 
 Two of these exist because the corresponding bug actually shipped and was caught afterwards:
 
