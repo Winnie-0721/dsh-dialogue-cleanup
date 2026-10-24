@@ -138,11 +138,14 @@ window.__ModuleLoader__.load({
         "panel.archivedRow": "已归档",
         "panel.archivedEmpty": "暂无已归档会话",
         "panel.kind": "会话类型",
-        "panel.kindHint": "官方侧栏默认隐藏子代理会话；这里可单独查看以便清理。子代理会话同样可删除。",
+        "panel.kindHint": "官方侧栏默认隐藏子代理会话；这里可单独查看以便清理。子代理会话同样可删除。「未知」表示宿主没给出足够的身份证据（例如只出现在摘要里），删前请自行确认。",
         "panel.kindMain": "主会话",
         "panel.kindSubagent": "子代理会话",
-        "panel.kindAll": "全部（含子代理）",
+        "panel.kindUnknown": "身份未知",
+        "panel.kindAll": "全部（含子代理与未知）",
         "panel.subagentRow": "子代理",
+        "panel.unknownRow": "未知",
+        "panel.unknownRowHint": "宿主没有给出足够的身份证据，无法确定这是主会话还是子代理会话。",
         "panel.noTitle": "（无标题）",
         "panel.busy": "处理中 {done}/{total}…",
         "panel.resultTitle": "批量删除结果",
@@ -251,11 +254,14 @@ window.__ModuleLoader__.load({
         "panel.archivedRow": "Archived",
         "panel.archivedEmpty": "No archived sessions yet",
         "panel.kind": "Session kind",
-        "panel.kindHint": "The official sidebar hides subagent sessions by default; show them here to clean them up. Subagent sessions are deletable too.",
+        "panel.kindHint": "The official sidebar hides subagent sessions by default; show them here to clean them up. Subagent sessions are deletable too. \"Unknown\" means the host gave no usable identity evidence (for example the row only came from a summary), so double-check before deleting.",
         "panel.kindMain": "Main sessions",
         "panel.kindSubagent": "Subagent sessions",
-        "panel.kindAll": "All (incl. subagents)",
+        "panel.kindUnknown": "Unknown identity",
+        "panel.kindAll": "All (incl. subagents and unknown)",
         "panel.subagentRow": "Subagent",
+        "panel.unknownRow": "Unknown",
+        "panel.unknownRowHint": "The host did not provide enough identity evidence to tell whether this is a main session or a subagent session.",
         "panel.noTitle": "(untitled)",
         "panel.busy": "Working {done}/{total}…",
         "panel.resultTitle": "Bulk delete result",
@@ -564,6 +570,14 @@ window.__ModuleLoader__.load({
 .dscc-badge-subagent {
   background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 12%, transparent);
   color: var(--dsw-alias-state-warn-primary);
+}
+/* 「身份未知」刻意**不用实底**：子代理是**已知**身份（warn 实底），未知是
+   **没有定下来**，所以用透明底 + 虚边 + 三级文字 —— 一眼能看出两者不是一回事，
+   又不会把「未知」渲染成比「运行中」更紧急的告警。 */
+.dscc-badge-unknown {
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  border: 0.5px dashed var(--dsw-alias-border-l4);
 }
 
 /* ───────────── 筛选条：官方「选择器药丸 + 内联 Menu」 ─────────────
@@ -1829,12 +1843,22 @@ window.__ModuleLoader__.load({
      * 子代理行显示「子代理」—— 官方侧栏**默认隐藏**这些行
      * （`origin: 'subagent'`），所以一旦它们出现在列表里（kind=subagent/all），
      * 必须明确标出身份，避免用户误以为那是普通会话。
-     * 注意：**归档 ≠ 不可删除**、**子代理 ≠ 不可删除** —— 两者都只是可见性，
-     * 数据仍在磁盘上，所以都照常可勾选删除（删除才是真正的销毁）。
+     * **身份未知**的行（`classification === 'unknown'`，摘要兜底行）单独标「未知」：
+     * 它们既不是主会话也不是子代理，界面上必须能看出来「这一行身份没定下来」，
+     * 否则用户在默认视图里看到它就会当成主会话删掉。
+     * 注意：**归档 ≠ 不可删除**、**子代理 ≠ 不可删除**、**未知 ≠ 不可删除** ——
+     * 三者都只是身份/可见性，数据仍在磁盘上，所以都照常可勾选删除。
      */
     function StateBadge({ row, t }) {
       if (row.archived === true) {
         return h("span", { className: "dscc-badge dscc-badge-archived" }, t("panel.archivedRow"));
+      }
+      if (row.classification === "unknown") {
+        return h(
+          "span",
+          { className: "dscc-badge dscc-badge-unknown", title: t("panel.unknownRowHint") },
+          t("panel.unknownRow"),
+        );
       }
       if (row.subagent === true) {
         return h("span", { className: "dscc-badge dscc-badge-subagent" }, t("panel.subagentRow"));
@@ -2072,14 +2096,17 @@ window.__ModuleLoader__.load({
             ],
             (next) => setParams((prev) => ({ ...prev, running: next, page: 1 })),
           ),
-          // 会话类型：官方侧栏默认隐藏子代理行；这里给显式三选一，
-          // 让用户既能看主会话（默认，与侧栏一致），也能专门清理子代理会话。
+          // 会话类型：官方侧栏默认隐藏子代理行；这里给显式四选一，
+          // 让用户既能看主会话（默认，与侧栏一致），也能专门清理子代理会话，
+          // 还能单独查看**身份未知**的会话（摘要兜底行等）——它们既不是主会话
+          // 也不是子代理，绝不能混进主会话视图里让人误删。
           select(
             "panel.kind",
             params.kind,
             [
               { value: "main", label: t("panel.kindMain") },
               { value: "subagent", label: t("panel.kindSubagent") },
+              { value: "unknown", label: t("panel.kindUnknown") },
               { value: "all", label: t("panel.kindAll") },
             ],
             (next) => setParams((prev) => ({ ...prev, kind: next, page: 1 })),
