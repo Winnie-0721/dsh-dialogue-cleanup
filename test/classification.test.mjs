@@ -315,3 +315,60 @@ test("分类：分类字段不因标题/项目/归档筛选而丢失", async () 
     assert.ok(["corpus", "summary", "corpus+summary", "conflict"].includes(row.classificationSource));
   }
 });
+
+/**
+ * 【HTTP 边界回归】`kind=unknown` 必须真的穿透到 service。
+ *
+ * 为什么单测绿了还要这一条：service 层把 unknown 解析得很好（上面 14 例全绿），
+ * 但 `lib/index.js` 在**路由边界**还有一层取值白名单。这层白名单只认
+ * main/subagent/all 时，`kind=unknown` 会在读查询串的阶段被丢掉，service 收到
+ * `undefined` 后按 `main` 兜底 —— 于是「身份未知」筛选在界面上点下去，返回的却是
+ * 一整页主会话。这是**真实宿主验收**发现的（`/list?kind=unknown` 返回 179 条主会话，
+ * 而单测全绿），单靠 service 层用例永远抓不到。
+ *
+ * 断言只用「回包里的 kind.filter」：它由 service 回显，能证明参数真的穿过了边界。
+ * 这里不造任何会话数据（宿主服务全缺席，列表为空），因此不依赖真实机器状态。
+ */
+test("HTTP 边界：GET /list?kind=unknown 必须穿透到 service（不得被白名单丢掉）", async () => {
+  const { apply } = await import("../lib/index.js");
+  const routes = new Map();
+  const ctx = {
+    logger: { debug() {}, warn() {} },
+    // 最小宿主替身：listSessions() 可用即可（返回空语料），
+    // 这样拿到的是 service 真实的 kind 回显，而不是 500 cleanup-unavailable。
+    get: (name) => (name === "sessionQuery" ? { listSessions: async () => [] } : undefined),
+    webServer: { register(route) { routes.set(route.path, route.handler); return () => {}; } },
+    effect: (callback) => callback(),
+  };
+  apply(ctx, { audit: false });
+
+  const call = async (url) => {
+    let captured = null;
+    const res = {
+      writeHead(status) { this._status = status; },
+      end(body) { captured = { status: this._status, body: String(body ?? "") }; },
+      setHeader() {},
+      writableEnded: false,
+    };
+    await routes.get("/api-ext/dialogue-cleanup/list")(
+      { method: "GET", url, headers: { "sec-fetch-site": "same-origin" }, resume() {} },
+      res,
+    );
+    assert.ok(captured, "handler 必须写出响应（不得悬挂）");
+    return JSON.parse(captured.body);
+  };
+
+  for (const kind of ["main", "subagent", "unknown", "all"]) {
+    const body = await call(`/api-ext/dialogue-cleanup/list?kind=${kind}`);
+    assert.equal(body.ok, true, `kind=${kind} 必须成功返回：${JSON.stringify(body)}`);
+    assert.equal(
+      body.value.kind.filter,
+      kind,
+      `kind=${kind} 必须在 HTTP 边界存活并回显；实际 filter=${body.value.kind.filter}（退回 main 说明白名单丢了该值）`,
+    );
+  }
+
+  // 非法值仍然不许穿透（白名单不能被"全放行"改坏）。
+  const bogus = await call("/api-ext/dialogue-cleanup/list?kind=bogus");
+  assert.equal(bogus.value.kind.filter, "main", "非法 kind 仍必须退回 main");
+});
