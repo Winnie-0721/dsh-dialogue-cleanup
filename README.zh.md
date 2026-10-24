@@ -154,10 +154,25 @@ DSH 本身有内核级会话写锁（`SessionWriteLease`，Windows 命名信号�
 | 方法 | 路径 | 用途 |
 |---|---|---|
 | `POST` | `/api-ext/dialogue-cleanup/delete` | `{ "sessionId": "..." }` 删一条；`{ "sessionIds": [...] }` 批量删（宿主逐条走同一个 `deleteSession`，返回逐条结果） |
-| `POST`/`GET` | `/api-ext/dialogue-cleanup/list` | 会话行，带 `deletable` / `blockedReason` |
+| `POST`/`GET` | `/api-ext/dialogue-cleanup/list` | 会话行，带 `deletable` / `blockedReason` / `classification` / `titleState` |
 | `GET` | `/api-ext/dialogue-cleanup/status` | 能力、配置、运行时路径 |
 
 信封：`{ ok: true, value }` / `{ ok: false, error: { code, message, hint? } }`。
+
+每行带 `titleState`，用来区分 `title` 为空的**四种**不同成因。把它们压成一句「（无标题）」
+正是一屏看起来像坏了的原因：
+
+| `titleState` | 含义 | 重试有用吗 |
+|---|---|---|
+| `ready` | 有标题 | — |
+| `blank` | `blank: true` —— 从未收到过用户消息（日志只有初始化事件） | 没用，它本来就不该有 |
+| `empty` | 有内容，但宿主明确答复没有标题（例如只跑了 `turn/start` → `turn/end` 的子代理会话） | 没用 |
+| `unread` | 有内容，本次没读到（超出 `titleLimit` 预算，或读取失败） | 有用 |
+
+`empty` 靠 `titleConfirmed` 集合支撑，只收宿主**成功答复过**的 id，所以「超预算」或「这一批
+RPC 失败」永远不会被伪装成「本来就没有标题」。客户端据此渲染三种不同占位文案，并对
+`empty` 与 `unread` 都印出会话 id（两者都是真会话，而删除不可逆），`blank` 则不印
+（实测 254 条里 199 条是空会话，铺满 UUID 会把真会话淹掉）。
 
 ## 配置
 
@@ -256,7 +271,7 @@ node scripts/render-shot.mjs
 | `audit.test.mjs` | 审计：字段最小化、截断、轮转（含不截断正在写的日志）、并发、路径不可写/越界、禁用、配置边界 |
 | `perf-regression.test.mjs` | 查询性能不退化的语义护栏：冷/热结果逐字段一致、单请求不重复读标题、N 并发只读一次、失败可恢复、指标不泄露标题与 `cwd` |
 | `client.test.mjs` | 注册面、id、不跨包 require |
-| `render.test.mjs` | 组件**真的被渲染**（React 替身） |
+| `render.test.mjs` | 组件**真的被渲染**（React 替身）；`titleState` 四种占位必须两两可区分，且 `empty` 不得复用 `unread` 的措辞 |
 | `artifacts.test.mjs` | 路径约束、符号链接拒绝、另一种拼写的守卫、`isRealPathInside` 正反断言 |
 | `session-id.test.mjs` | id 校验（不含分隔符与点号） |
 | `eol.test.mjs` | 行尾，以及每个被跟踪文件都被 git 声明为 `eol=lf` |

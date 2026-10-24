@@ -131,10 +131,26 @@ One npm package carries both halves, installed into the host per the official pl
 | Method | Path | Purpose |
 |---|---|---|
 | `POST` | `/api-ext/dialogue-cleanup/delete` | `{ "sessionId": "..." }` → delete one; `{ "sessionIds": [...] }` → delete many (the Host runs the same `deleteSession` per id and returns a per-id result) |
-| `POST`/`GET` | `/api-ext/dialogue-cleanup/list` | session rows with `deletable` / `blockedReason` |
+| `POST`/`GET` | `/api-ext/dialogue-cleanup/list` | session rows with `deletable` / `blockedReason` / `classification` / `titleState` |
 | `GET` | `/api-ext/dialogue-cleanup/status` | capabilities, config, runtime paths |
 
 Envelope: `{ ok: true, value }` / `{ ok: false, error: { code, message, hint? } }`.
+
+Each `/list` row carries `titleState`, which distinguishes the four reasons `title` can be
+empty. Collapsing them into one "untitled" label is what made a whole screen look broken:
+
+| `titleState` | Meaning | Retry helps? |
+|---|---|---|
+| `ready` | the title is present | — |
+| `blank` | `blank: true` — the session never received a user message (init events only) | no, it should never have had one |
+| `empty` | the session has content, but the host answered that there is genuinely no title (e.g. a subagent session that only ran `turn/start` → `turn/end`) | no |
+| `unread` | the session has content, but the title was not read this time (outside `titleLimit`, or the read failed) | yes |
+
+`empty` is backed by a `titleConfirmed` set that only accepts ids the host **answered for**
+successfully, so a budget miss or a failed batch can never masquerade as "there is no title".
+The client renders three distinct placeholders from this, and prints the session id for both
+`empty` and `unread` rows (both are real sessions, and deletion is irreversible) while staying
+silent for `blank` rows (199 of 254 on a measured profile — a wall of UUIDs would bury the real ones).
 
 ## Configuration
 
@@ -219,7 +235,7 @@ each platform actually runs 291):
 | `audit.test.mjs` | audit log: field minimisation, truncation, rotation (without truncating the log being written), concurrency, unwritable/out-of-root paths, disabled, config bounds |
 | `perf-regression.test.mjs` | query-performance semantic guards: cold vs warm results identical field by field, no duplicate title reads within one request, N concurrent requests read once, failures recoverable, metrics never leak titles or `cwd` |
 | `client.test.mjs` | registration surface, ids, no-cross-package requires |
-| `render.test.mjs` | components **actually rendered** through a React stand-in |
+| `render.test.mjs` | components **actually rendered** through a React stand-in; the four `titleState` placeholders must be pairwise distinguishable, and `empty` must not reuse `unread`'s wording |
 | `artifacts.test.mjs` | path containment, symlink refusal, alternate-spelling guards, `isRealPathInside` positive and negative |
 | `session-id.test.mjs` | id validation (no separators or dots) |
 | `eol.test.mjs` | line endings, and that every tracked file is git-declared `eol=lf` |
