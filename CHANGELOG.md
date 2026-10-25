@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+### 修复：「已隐藏 N 条空会话」在带筛选的视图里多报
+
+`blank.total` 是**全库**口径（与 `archived.total` 同构），回答的是「库里一共有多少条
+空会话」。但界面那句提示说的是「**你这个视图**里刚才消失了多少条」。两者在
+`kind=all` 下恰好相等，一加 `kind` / `project` 筛选就分叉：
+
+- 真机实测 `kind=main&blank=hide` → 返回 `total=8`、`blank.total=13`，而同一视图
+  在 `blank=show` 下只有 **12** 条空会话行 —— **提示条多报 1 条**（第 13 条是子代理
+  空会话，本来就被 `kind=main` 滤掉了，从来没出现在这个视图里）；
+- `project=E:\AI\DeepSeek Harness\tmp` 时同样：`blank.total` 仍是全库 13，实际本视图
+  只藏了 7 条。
+
+数字偏大看着不严重，但它是在**告诉用户「刚才消失了什么」**——报多了等于谎报，而这一整
+轮修复的起点正是「界面说的话和事实对不上」。
+
+**修法**：在空会话筛选处（其它筛选全部生效之后、空会话筛选之前）统计本视图实际藏掉的
+条数，返回体扩展为 `blank: { filter, total, hiddenInView }`：
+
+- `total` —— 全库口径，语义不变，仍供「库里一共多少条」这类判断；
+- `hiddenInView` —— 本次这个视图实际藏掉的条数（已扣除 kind / project / archived /
+  running 等筛选）。仅 `filter === 'hide'` 时非零；`show` / `only` 恒为 `0`。
+
+客户端提示条改取 `hiddenInView`；旧宿主没有该字段时回退 `total`（行为与修复前一致，
+不至于不提示）。
+
+**新增回归测试**：`test/contract.test.mjs` 的
+「空会话：`hiddenInView` 必须只数本视图真正藏掉的，不得拿全库 `total` 冒充」——
+构造「空的主会话 + 空的子代理会话」，断言默认 `kind=main&hide` 下 `total=2` 而
+`hiddenInView=1`；`kind=all&hide` 下两者都 2；`show` / `only` 档 `hiddenInView=0`。
+（最后一组同时防止「把 `hiddenInView` 写死成 `total`」蒙混过关。）
+
+**真机只读验收**：`kind=main&blank=hide` → `total=8`、`blank.total=13`；
+`kind=main&blank=show` → `total=20`、其中空会话行 **12** 条 ⇒ `13 - 12 = 1` 条是
+子代理空会话，`hiddenInView` 应为 12；`kind=all&blank=show` → `total=57`、
+`kind=all&blank=hide` → `total=44` ⇒ 全库藏掉 13 条，与 `blank.total` 相符。
+
 ### 修复：空会话三选一根本没接进请求 —— 下拉框「只看不生效」
 
 上一节加了 `blank` 三选一，但**客户端两处链路都漏了这个参数**，于是界面上：

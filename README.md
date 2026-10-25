@@ -52,8 +52,11 @@ positioning made concrete:
   `if (session.blank && session.id !== current) return false;`. Here it is a tri-state filter —
   `hide blank` / `all` / `blank only` — **default `hide`**; the two explicit settings exist because
   cleaning disk is this plugin's job, so blank sessions stay reachable for bulk deletion. The list
-  reports `blank: { filter, total }` and the panel shows "N blank sessions hidden" with a one-click
-  switch, so nothing ever looks silently lost.
+  reports `blank: { filter, total, hiddenInView }` — `total` is the whole-corpus count (like
+  `archived.total`), `hiddenInView` is how many *this view* actually hid after the other filters
+  ran — and the panel's "N blank sessions hidden" line uses `hiddenInView`, so the number always
+  describes the list the user is looking at. One click switches the filter, so nothing ever looks
+  silently lost.
 - **Subagent rows are labelled.** The official sidebar hides `origin: 'subagent'` rows entirely, so
   whenever those rows do appear (kind = subagent / all) each one is explicitly badged — a subagent
   session must never look like an ordinary conversation.
@@ -232,8 +235,8 @@ node scripts/render-shot.mjs
 > `test/*.test.mjs` itself and hands the list to `node --test`, so all three Node versions
 > and both platforms behave identically (covered by CI).
 
-The suites are currently **300 tests across 18 files** (3 of them are platform-specific, so
-each platform actually runs 297):
+The suites are currently **301 tests across 18 files** (3 of them are platform-specific, so
+each platform actually runs 298):
 
 | Suite | Covers |
 |---|---|

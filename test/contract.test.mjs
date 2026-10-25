@@ -1139,6 +1139,45 @@ test("空会话：默认隐藏（照官方 sessionVisible），且如实报出�
   assert.equal(result.value.blank.total, 1, "必须报告全库空会话数，供界面提示「已隐藏 N 条」");
 });
 
+test("空会话：`hiddenInView` 必须只数本视图真正藏掉的，不得拿全库 `total` 冒充", async () => {
+  // 【缺陷实录】`blank.total` 是全库口径（与 `archived.total` 同构），但界面那句
+  // 「已隐藏 N 条空会话」说的是**这个视图**里少了多少条。两者在 kind=all 下恰好
+  // 相等，一加筛选就分叉：真机实测 `kind=main&blank=hide` 全库 13 条、本视图只
+  // 藏了 12 条（第 13 条是子代理会话，本来就被 kind 滤掉了），提示条报 13。
+  // 报多了看着不严重，但那是在「告诉用户刚才消失了什么」—— 谎报。
+  //
+  // 构造：s-old 是空主会话，s-sub 是**空的子代理会话**。默认 kind=main 时
+  // s-sub 先被类型筛掉，所以本视图只藏了 1 条，而全库有 2 条。
+  const { service } = makePanelCtx({
+    withSubagent: true,
+    summaries: [
+      { sessionId: "s-new", running: true, blank: false, updatedAt: 9000 },
+      { sessionId: "s-old", running: false, blank: true, updatedAt: 8000 },
+      { sessionId: "s-mid", running: false, blank: false, updatedAt: 5000 },
+      { sessionId: "s-sub", running: false, blank: true, updatedAt: 4000 },
+    ],
+  });
+
+  const mainHide = await service.listSessions(); // 默认 kind=main + blank=hide
+  assert.equal(mainHide.value.blank.total, 2, "total 是全库口径：s-old + s-sub 都算");
+  assert.equal(
+    mainHide.value.blank.hiddenInView,
+    1,
+    "hiddenInView 必须只数本视图藏掉的（s-sub 已被 kind 筛掉，不该算进来）",
+  );
+
+  // 全库视图下两者才相等 —— 这条同时防止「把 hiddenInView 写死成 total」蒙混过关。
+  const allHide = await service.listSessions({ kind: "all" });
+  assert.equal(allHide.value.blank.total, 2);
+  assert.equal(allHide.value.blank.hiddenInView, 2, "kind=all 时本视图与全库一致");
+
+  // 没藏任何东西的档位必须是 0，否则界面会凭空出现「已隐藏 0 条」以外的错提示。
+  const shown = await service.listSessions({ kind: "all", blank: "show" });
+  assert.equal(shown.value.blank.hiddenInView, 0, "show 档一条都没藏");
+  const only = await service.listSessions({ kind: "all", blank: "only" });
+  assert.equal(only.value.blank.hiddenInView, 0, "only 档一条都没藏");
+});
+
 test("空会话：show 显示全部，并逐行保留 blank 标记", async () => {
   const { service } = makePanelCtx({ summaries: BLANK_SUMMARIES });
   const result = await service.listSessions({ blank: "show" });

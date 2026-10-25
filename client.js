@@ -2087,8 +2087,17 @@ window.__ModuleLoader__.load({
       // 【「一屏无标题」的提示条】默认视图隐藏空会话（照官方 sessionVisible），
       // 但必须让用户知道「隐藏了 N 条」，否则会以为会话被插件弄丢了。
       // 只在 hide 档、且确实隐藏了内容时提示；show/only 档不提示。
+      //
+      // **必须用 `hiddenInView` 而不是 `total`**：`total` 是全库口径，提示条说的是
+      // 「你这个视图里刚才消失了多少条」。两者在 kind=all 下恰好相等，一加筛选就分叉
+      // —— 实测 `kind=main&blank=hide` 全库 13 条、本视图只藏 12 条，用 total 会报 13。
+      // 旧宿主没有 `hiddenInView` 时回退到 `total`（此时行为与修复前一致，不至于不提示）。
       const blankHiddenCount =
-        params.blank === "hide" && Number.isInteger(value?.blank?.total) ? value.blank.total : 0;
+        params.blank === "hide" && Number.isInteger(value?.blank?.hiddenInView)
+          ? value.blank.hiddenInView
+          : params.blank === "hide" && Number.isInteger(value?.blank?.total)
+            ? value.blank.total
+            : 0;
       const blankNotice =
         blankHiddenCount > 0
           ? h(

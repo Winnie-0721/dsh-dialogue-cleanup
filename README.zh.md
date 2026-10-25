@@ -44,8 +44,10 @@
   `（无标题）` 的原因。官方侧栏 `sessionVisible()` 写的是
   `if (session.blank && session.id !== current) return false;`。这里是三选一 ——
   `隐藏空会话` / `全部` / `仅显示空会话`，**默认隐藏**；另给两个显式档位，是因为清理磁盘才是
-  本插件的职责，空会话仍需能被批量删掉。列表返回 `blank: { filter, total }`，面板顶部显示
-  「已隐藏 N 条空会话」并提供一键切换，任何东西都不会「悄悄消失」。
+  本插件的职责，空会话仍需能被批量删掉。列表返回 `blank: { filter, total, hiddenInView }` ——
+  `total` 是**全库**口径（同 `archived.total`），`hiddenInView` 是**本视图**在其它筛选生效后
+  实际藏掉的条数；面板那句「已隐藏 N 条空会话」用的是 `hiddenInView`，所以数字永远描述
+  用户正在看的这个列表。一键即可切换档位，任何东西都不会「悄悄消失」。
 - **子代理行明确标注。** 官方侧栏把 `origin: 'subagent'` 的行整个藏起来，所以一旦这些行出现
   （kind = 子代理 / 全部），每一行都会显式打上徽标 —— 子代理会话绝不能看起来像普通对话。
 - **它如实汇报做了什么。** 结果行给出 成功 / 失败 / 降级 / 删掉的目录数，每条失败原因**原样保留**。
@@ -267,7 +269,7 @@ node scripts/render-shot.mjs
 > `Could not find '.../test/**/*.test.mjs'`。`scripts/run-tests.mjs` 由 Node 自己枚举
 > `test/*.test.mjs` 再交给 `node --test`，三个版本、两个平台行为一致（CI 已覆盖）。
 
-当前共 **300 条测试 / 18 个文件**（其中 3 条是平台相关用例，每个平台实际跑 297 条）：
+当前共 **301 条测试 / 18 个文件**（其中 3 条是平台相关用例，每个平台实际跑 298 条）：
 
 | 套件 | 覆盖 |
 |---|---|
@@ -321,7 +323,7 @@ node scripts/render-shot.mjs
 | `docs/RELEASING.md` | 版本号规则与发布链路 |
 | `scripts/release.ps1` | 版本递增 + 门禁（+ CI 打包发布） |
 | `scripts/render-shot.mjs` | 重新生成文档截图 |
-| `test/` | 300 条回归测试 |
+| `test/` | 301 条回归测试 |
 | `VERIFICATION.md` | 完整验收报告 |
 
 ## 关于上游
