@@ -33,10 +33,14 @@
 `hiddenInView=1`；`kind=all&hide` 下两者都 2；`show` / `only` 档 `hiddenInView=0`。
 （最后一组同时防止「把 `hiddenInView` 写死成 `total`」蒙混过关。）
 
-**真机只读验收**：`kind=main&blank=hide` → `total=8`、`blank.total=13`；
-`kind=main&blank=show` → `total=20`、其中空会话行 **12** 条 ⇒ `13 - 12 = 1` 条是
-子代理空会话，`hiddenInView` 应为 12；`kind=all&blank=show` → `total=57`、
-`kind=all&blank=hide` → `total=44` ⇒ 全库藏掉 13 条，与 `blank.total` 相符。
+**真机只读观察（宿主仍在跑修复前的代码，故 `hiddenInView` 尚不可见）**：
+`kind=main&blank=hide` → `total=8`、`blank={"filter":"hide","total":13}`；
+同一视图 `kind=main&blank=show` → `total=20`、其中空会话行 **12** 条；
+`kind=all&blank=show` → `total=57`、`kind=all&blank=hide` → `total=44`
+（57 − 44 = 13，与全库 `blank.total` 相符）。
+由 13 − 12 = 1 可推出这 1 条是子代理空会话，因此 `kind=main` 视图的
+`hiddenInView` 应为 **12**。该字段需宿主重启加载新代码后才会出现在返回体里，
+**本轮尚未做该确认**。
 
 ### 修复：空会话三选一根本没接进请求 —— 下拉框「只看不生效」
 
