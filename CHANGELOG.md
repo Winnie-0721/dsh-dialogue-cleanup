@@ -2,6 +2,45 @@
 
 ## Unreleased
 
+### 修复：空会话默认隐藏 —— 「一屏（无标题）」的真正根因
+
+四态文案（上一节）解决的是「同一种空白长得一样」，但**首屏仍然是一屏占位**。
+真正的根因不是标题读不到，而是**空会话把列表刷满了**：
+
+- 空会话 = 从未收到过任何用户消息的会话。日志只有 5 行初始化事件
+  （`session` / `permission/preset` / `sandbox/mode` / `approval/policy` /
+  `subagent/model-selection-policy`，约 **588 字节**），既没有 `user/message`
+  也没有 `session/title` —— 它们本来就不该有标题；
+- 数量悬殊：实测某宿主 254 条会话里 **199 条**是空会话，一行一条就把面板首屏
+  刷成一片「（无标题）」，真会话被挤到后面；
+- 与用户在自己侧栏看到的东西完全对不上，所以反复反馈「还没解决」。
+
+**契约依据（不是猜测）**：`@deepseek-ai/dsh-client-ui-workspace/lib/client.js` 的
+`sessionVisible()` 里有一行 `if (session.blank && session.id !== current) return false;`，
+注释原文「Ordinary sessions are visible; among blank sessions, only the current one
+is visible.」—— **官方侧栏默认隐藏所有空会话**，只留当前那一条（就是「新会话」占位行）。
+
+`/list` 新增 `blank: 'hide' | 'show' | 'only'` 三选一（与既有 `archived` 三选一同构），
+**默认 `hide`，与官方侧栏一致**。不照抄「只留当前那一条」的原因：官方只留一条是因为
+侧栏里空会话只是占位符、没有清理价值；而本插件是**清理磁盘**的工具，空会话虽然小
+同样是可删对象，用户要能批量清掉它们。所以默认对齐官方体验，另给两个显式出口：
+
+- `hide`（默认）—— 隐藏空会话，首屏全是真会话；
+- `show` —— 与普通会话一起列，排查/彻底清理用；
+- `only` —— 只看空会话，专门批量删。
+
+返回体新增 `blank: { filter, total }`，`total` 是**全库**口径（不随筛选变化）。
+客户端据此在默认视图顶部显示「已隐藏 N 条空会话」提示条 + 一键切到「仅显示空会话」，
+避免用户以为会话被插件弄丢了。
+
+服务端 `blankFilter` 与客户端 `params.blank` 的默认值由测试钉住必须一致
+（与 `archived` 默认值同一套防偏差逻辑）。
+
+**真机只读验收**（宿主加载本改动后）：`kind=all` 三种档位
+`show=57 / hide=44 / only=13`，`44 + 13 = 57` 恒等；`hide` 视图 `blank=true` 行数 **0**，
+`only` 视图非空会话行数 **0**；默认 `kind=main` 视图 **8 行全部 `titleState=ready`、
+无标题行 0**。
+
 ### 修复：标题占位四态化 —— 「本来没有标题」不得再和「本次没读到」长得一样
 
 面板里曾出现一屏「（无标题）」，用户无法判断是自己漏了、还是列表坏了。实测取证后

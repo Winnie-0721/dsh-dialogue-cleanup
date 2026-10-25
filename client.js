@@ -137,6 +137,14 @@ window.__ModuleLoader__.load({
         "panel.archivedOnly": "仅显示已归档",
         "panel.archivedRow": "已归档",
         "panel.archivedEmpty": "暂无已归档会话",
+        "panel.blankFilter": "空会话",
+        "panel.blankHint": "空会话 = 从未收到过消息的会话（日志只有初始化事件，本来就没有标题）。它们数量往往远多于真会话，会把列表刷成一片「无标题」。默认隐藏，与官方侧栏一致。",
+        "panel.blankHide": "隐藏空会话",
+        "panel.blankShow": "全部（显示空会话）",
+        "panel.blankOnly": "仅显示空会话",
+        "panel.blankRow": "空会话",
+        "panel.blankHiddenNotice": "已隐藏 {n} 条空会话（从未有消息的会话）。",
+        "panel.blankOnlyEmpty": "暂无空会话",
         "panel.kind": "会话类型",
         "panel.kindHint": "官方侧栏默认隐藏子代理会话；这里可单独查看以便清理。子代理会话同样可删除。「未知」表示宿主没给出足够的身份证据（例如只出现在摘要里），删前请自行确认。",
         "panel.kindMain": "主会话",
@@ -266,6 +274,14 @@ window.__ModuleLoader__.load({
         "panel.archivedOnly": "Archived only",
         "panel.archivedRow": "Archived",
         "panel.archivedEmpty": "No archived sessions yet",
+        "panel.blankFilter": "Blank sessions",
+        "panel.blankHint": "A blank session never received a message (its log holds only initialization events, so it never had a title). They usually far outnumber real sessions and can fill the list with \"(no title)\". Hidden by default, matching the official sidebar.",
+        "panel.blankHide": "Hide blank sessions",
+        "panel.blankShow": "All (show blank sessions)",
+        "panel.blankOnly": "Blank sessions only",
+        "panel.blankRow": "Blank",
+        "panel.blankHiddenNotice": "{n} blank sessions hidden (never had a message).",
+        "panel.blankOnlyEmpty": "No blank sessions",
         "panel.kind": "Session kind",
         "panel.kindHint": "The official sidebar hides subagent sessions by default; show them here to clean them up. Subagent sessions are deletable too. \"Unknown\" means the host gave no usable identity evidence (for example the row only came from a summary), so double-check before deleting.",
         "panel.kindMain": "Main sessions",
@@ -843,6 +859,9 @@ window.__ModuleLoader__.load({
 .dscc-panel-pager { display: flex; gap: 10px; align-items: center; justify-content: flex-end; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-tertiary); }
 .dscc-panel-cost { font-variant-numeric: tabular-nums; opacity: 0.85; }
 .dscc-panel-hidden { color: var(--dsw-alias-state-warn-primary); }
+/* 「已隐藏 N 条空会话」提示条：低调说明行 + 切到「仅显示空会话」的出口。
+   刻意不用告警色 —— 隐藏空会话是正常默认视图，不是异常。 */
+.dscc-panel-notice { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 10px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-tertiary); }
 
 /* ───────────── 弹窗：官方 Modal.module.css ─────────────
    【层级方案 · showModal() 进 top layer（2026-10-18 用户实测修复）】
@@ -1985,6 +2004,20 @@ window.__ModuleLoader__.load({
         archived: "show",
         // 会话类型三选一：main（默认，照官方隐藏子代理）/ subagent / all。
         kind: "main",
+        // 空会话三选一：hide（默认，照官方侧栏）/ show / only。
+        //
+        // 【为什么默认 hide —— 这是「一屏（无标题）」的真正解法】
+        // 空会话 = 从未收到过用户消息的会话，日志只有 5 行初始化事件（约 588 字节），
+        // 本来就不该有标题。实测某个宿主里 254 条会话有 199 条是空会话，
+        // 一行一条会把面板首屏刷成一片「（无标题）」，真会话被挤到后面。
+        //
+        // 官方侧栏的判据（`@deepseek-ai/dsh-client-ui-workspace/lib/client.js`
+        // 的 `sessionVisible()`）：
+        //     `if (session.blank && session.id !== current) return false;`
+        // 即默认只留当前那一条。本插件默认值跟官方一致（hide），
+        // 另给 `show` / `only` 两个显式出口用于排查与批量清理。
+        // 服务端 `blankFilter` 的默认值必须与此一致（有测试钉住两端）。
+        blank: "hide",
         sort: "activity",
         page: 1,
         pageSize: 50,
@@ -2040,6 +2073,28 @@ window.__ModuleLoader__.load({
 
       const value = state.value;
       const items = Array.isArray(value?.items) ? value.items : [];
+      // 【「一屏无标题」的提示条】默认视图隐藏空会话（照官方 sessionVisible），
+      // 但必须让用户知道「隐藏了 N 条」，否则会以为会话被插件弄丢了。
+      // 只在 hide 档、且确实隐藏了内容时提示；show/only 档不提示。
+      const blankHiddenCount =
+        params.blank === "hide" && Number.isInteger(value?.blank?.total) ? value.blank.total : 0;
+      const blankNotice =
+        blankHiddenCount > 0
+          ? h(
+              "div",
+              { className: "dscc-panel-notice" },
+              h("span", null, t("panel.blankHiddenNotice", { n: blankHiddenCount })),
+              h(
+                "button",
+                {
+                  type: "button",
+                  className: "dscc-btn",
+                  onClick: () => setParams((prev) => ({ ...prev, blank: "only", page: 1 })),
+                },
+                t("panel.blankOnly"),
+              ),
+            )
+          : null;
       const selectedIds = Object.keys(selected).filter((id) => selected[id] === true);
       const deletableOnPage = items.filter((row) => row.deletable === true);
 
@@ -2198,6 +2253,18 @@ window.__ModuleLoader__.load({
             (next) => setParams((prev) => ({ ...prev, archived: next, page: 1 })),
             "panel.archivedHint",
           ),
+          // 空会话三选一。这是「一屏无标题」的真正开关 —— 详见 params.blank 的注释。
+          select(
+            "panel.blankFilter",
+            params.blank,
+            [
+              { value: "hide", label: t("panel.blankHide") },
+              { value: "show", label: t("panel.blankShow") },
+              { value: "only", label: t("panel.blankOnly") },
+            ],
+            (next) => setParams((prev) => ({ ...prev, blank: next, page: 1 })),
+            "panel.blankHint",
+          ),
           select(
             "panel.sort",
             params.sort,
@@ -2284,26 +2351,39 @@ window.__ModuleLoader__.load({
           h("p", null, h("strong", null, `${t("error.label.next")}：`), info.next),
         );
       } else if (items.length === 0) {
-        // 「仅显示已归档」空结果有专属文案（照官方：empty.noneArchived + 一键切回）。
+        // 两个专属空态：仅看已归档 / 仅看空会话。照官方做法给一键切回。
         const archivedOnly = params.archived === "only";
+        const blankOnly = params.blank === "only";
+        const hero = blankOnly ? t("panel.blankOnlyEmpty") : archivedOnly ? t("panel.archivedEmpty") : t("panel.empty");
         tableBody = h(
           "div",
           { className: "dscc-panel-state" },
-          h("p", null, h("strong", null, archivedOnly ? t("panel.archivedEmpty") : t("panel.empty"))),
-          archivedOnly
+          h("p", null, h("strong", null, hero)),
+          blankOnly
             ? h(
                 "button",
                 {
                   type: "button",
                   className: "dscc-btn",
-                  // 从「仅显示已归档」退回**默认视图**。默认值是 show（显示已归档），
-                  // 所以这里必须回 show 而不是 default —— 否则点一下会把用户
-                  // 丢进「隐藏已归档」，与面板默认状态不一致，看着像跳错页。
-                  onClick: () => setParams((prev) => ({ ...prev, archived: "show", page: 1 })),
+                  // 从「仅显示空会话」退回**默认视图** hide。
+                  onClick: () => setParams((prev) => ({ ...prev, blank: "hide", page: 1 })),
                 },
-                t("panel.archivedShow"),
+                t("panel.blankHide"),
               )
-            : h("p", null, t("panel.emptyBody")),
+            : archivedOnly
+              ? h(
+                  "button",
+                  {
+                    type: "button",
+                    className: "dscc-btn",
+                    // 从「仅显示已归档」退回**默认视图**。默认值是 show（显示已归档），
+                    // 所以这里必须回 show 而不是 default —— 否则点一下会把用户
+                    // 丢进「隐藏已归档」，与面板默认状态不一致，看着像跳错页。
+                    onClick: () => setParams((prev) => ({ ...prev, archived: "show", page: 1 })),
+                  },
+                  t("panel.archivedShow"),
+                )
+              : h("p", null, t("panel.emptyBody")),
         );
       } else {
         // 卡片式列表（照原项目 sessdel-list / sessdel-row 的做法）：
@@ -2474,6 +2554,7 @@ window.__ModuleLoader__.load({
         ),
         toolbar,
         bulk,
+        blankNotice,
         tableBody,
         pager,
       );

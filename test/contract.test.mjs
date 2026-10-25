@@ -1106,6 +1106,92 @@ test("归档：归档≠不可删除 —— 归档行仍可删除", async () => 
 });
 
 /**
+ * 空会话三选一（`blank: 'hide' | 'show' | 'only'`）—— **「面板一屏（无标题）」的根因回归**。
+ *
+ * 【问题】用户反复反馈「无标题还没解决」。取证结论：标题其实读得好好的
+ * （55 条非空会话 55/55 都有标题）；真正占满首屏的是**空会话** ——
+ * 从未收到过任何用户消息的会话，日志只有 5 行初始化事件（约 588 字节），
+ * 既没有 `user/message` 也没有 `session/title`，本来就不该有标题，
+ * 但数量远多于真会话（实测某宿主 254 条里 199 条是空会话）。
+ *
+ * 【官方语义（契约依据）】`@deepseek-ai/dsh-client-ui-workspace/lib/client.js` 的
+ * `sessionVisible()`：`if (session.blank && session.id !== current) return false;`
+ * 注释原文「Ordinary sessions are visible; among blank sessions, only the
+ * current one is visible.」—— 官方侧栏默认隐藏空会话。
+ *
+ * 【本插件的选择】默认 `hide` 与官方一致；另给 `show` / `only` 两个显式出口，
+ * 因为本插件是清理工具，空会话同样是可删对象，用户要能单独批量清掉。
+ */
+const BLANK_SUMMARIES = [
+  { sessionId: "s-new", running: true, blank: false, updatedAt: 9000 },
+  { sessionId: "s-old", running: false, blank: true, updatedAt: 8000 },
+  { sessionId: "s-mid", running: false, blank: false, updatedAt: 5000 },
+];
+
+test("空会话：默认隐藏（照官方 sessionVisible），且如实报出隐藏了多少条", async () => {
+  const { service } = makePanelCtx({ summaries: BLANK_SUMMARIES });
+  const result = await service.listSessions();
+  const ids = result.value.items.map((r) => r.sessionId);
+  assert.equal(ids.includes("s-old"), false, "默认必须隐藏空会话（否则首屏被「无标题」刷满）");
+  assert.equal(ids.includes("s-new"), true, "非空会话必须仍在");
+  assert.equal(ids.includes("s-mid"), true, "非空会话必须仍在");
+  assert.equal(result.value.blank.filter, "hide", "默认 filter 必须是 hide");
+  assert.equal(result.value.blank.total, 1, "必须报告全库空会话数，供界面提示「已隐藏 N 条」");
+});
+
+test("空会话：show 显示全部，并逐行保留 blank 标记", async () => {
+  const { service } = makePanelCtx({ summaries: BLANK_SUMMARIES });
+  const result = await service.listSessions({ blank: "show" });
+  const byId = Object.fromEntries(result.value.items.map((r) => [r.sessionId, r]));
+  assert.equal(result.value.total, 3, "show 必须纳入空会话");
+  assert.equal(byId["s-old"].blank, true, "空会话行必须带 blank:true 供 UI 显示占位文案");
+  assert.equal(byId["s-new"].blank, false);
+  assert.equal(result.value.blank.filter, "show");
+  // 计数是**全库**口径，不随筛选变化 —— 否则用户切视图时数字会跳。
+  assert.equal(result.value.blank.total, 1, "blank.total 不受筛选影响");
+});
+
+test("空会话：only 只显示空会话", async () => {
+  const { service } = makePanelCtx({ summaries: BLANK_SUMMARIES });
+  const result = await service.listSessions({ blank: "only" });
+  assert.deepEqual(result.value.items.map((r) => r.sessionId), ["s-old"], "only 必须只剩空会话");
+  assert.equal(result.value.blank.filter, "only");
+  assert.equal(result.value.blank.total, 1);
+});
+
+test("空会话：客户端与服务端的默认值必须一致（防「界面切了接口没切」）", async () => {
+  // 与归档默认值同一个理由：默认值分散在 client.js（useState 初值）与
+  // lib/service.js（请求缺省兜底）两处，改一处忘另一处会只在特定路径复现。
+  const { readFile } = await import("node:fs/promises");
+  const path = await import("node:path");
+  const { fileURLToPath } = await import("node:url");
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+  const clientSrc = await readFile(path.join(root, "client.js"), "utf8");
+  const serviceSrc = await readFile(path.join(root, "lib/service.js"), "utf8");
+
+  const clientDefault = /blank:\s*"(hide|show|only)"/.exec(clientSrc)?.[1];
+  assert.ok(clientDefault, "必须能从 client.js 读到 blank 默认值");
+
+  const svcLine = /const blankFilter\s*=\s*([^;]+);/.exec(serviceSrc)?.[1];
+  assert.ok(svcLine, "必须能从 service.js 读到 blankFilter 默认逻辑");
+  const fallback = /:\s*"(hide|show|only)"\s*$/.exec(svcLine.trim())?.[1];
+  assert.ok(fallback, `必须能从服务端三元表达式里取出兜底值（当前：${svcLine.trim().slice(0, 90)}）`);
+
+  assert.equal(fallback, "hide", "服务端兜底必须是 hide");
+  assert.equal(clientDefault, fallback, `客户端默认（${clientDefault}）必须与服务端兜底（${fallback}）一致`);
+});
+
+test("空会话：筛选不得改变删除能力判定（空会话照样可删）", async () => {
+  // 空会话是「没有消息」而非「不可删除」。默认隐藏只是视图问题，
+  // 一旦切到 show/only 看到它们，必须仍然可删（这是清理工具的主要用途之一）。
+  const { service } = makePanelCtx({ summaries: BLANK_SUMMARIES });
+  const result = await service.listSessions({ blank: "only" });
+  assert.equal(result.value.items[0].deletable, true, "空会话不因 blank 而变成不可删除");
+});
+
+
+/**
  * 会话类型三选一 —— **这是「会话逻辑不对」的根因回归**。
  *
  * 官方 README：「**侧边栏隐藏持久化摘要中带有 `origin: 'subagent'` 的行。**」
@@ -1215,9 +1301,13 @@ test("listSessions：sessionQuery 缺失时降级到 sessionController（不报�
   // 【TASK-CLASSIFICATION-01】sessionQuery 完全没有 ⇒ 只剩摘要 ⇒ 身份未知。
   // 行不能丢（那是静默丢数据），但也不得冒充主会话（那是删错会话的诱因）。
   assert.equal(result.value.total, 0, "身份未知的行不得出现在默认主会话视图里");
+  // 【空会话默认隐藏】这一行同时是 `blank: true`，默认视图隐藏它还有第二个原因；
+  // 计数必须如实报出，否则用户会以为行被弄丢了。
+  assert.equal(result.value.blank.total, 1, "全库空会话计数必须包含它");
 
-  const all = await service.listSessions({ kind: "all" });
-  assert.equal(all.value.total, 1, "kind=all 必须仍然列出该行");
+  // 要看它得显式放开两个开关：kind=all（身份未知）+ blank=show（空会话）。
+  const all = await service.listSessions({ kind: "all", blank: "show" });
+  assert.equal(all.value.total, 1, "kind=all + blank=show 必须仍然列出该行");
   assert.equal(all.value.items[0].sessionId, "s1");
   assert.equal(all.value.items[0].classification, "unknown");
   assert.equal(all.value.kind.unknownTotal, 1);

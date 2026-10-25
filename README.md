@@ -44,6 +44,16 @@ positioning made concrete:
   still occupies disk, so hiding it by default would hide exactly the files you came to clean up.
   (The official sidebar hides them; here it is a tri-state filter — `hide archived` / `all` /
   `archived only` — and **archived are shown by default**.)
+- **Blank sessions are hidden by default** (matching the official sidebar). A blank session never
+  received a message: its log holds only five initialization events (~588 bytes) with no
+  `user/message` and no `session/title`, so it never had a title to show. They usually far outnumber
+  real sessions (199 of 254 on one host), and listing them one-per-row is what used to fill the
+  panel with `(no title)`. The official sidebar's `sessionVisible()` does
+  `if (session.blank && session.id !== current) return false;`. Here it is a tri-state filter —
+  `hide blank` / `all` / `blank only` — **default `hide`**; the two explicit settings exist because
+  cleaning disk is this plugin's job, so blank sessions stay reachable for bulk deletion. The list
+  reports `blank: { filter, total }` and the panel shows "N blank sessions hidden" with a one-click
+  switch, so nothing ever looks silently lost.
 - **Subagent rows are labelled.** The official sidebar hides `origin: 'subagent'` rows entirely, so
   whenever those rows do appear (kind = subagent / all) each one is explicitly badged — a subagent
   session must never look like an ordinary conversation.
