@@ -232,8 +232,8 @@ node scripts/render-shot.mjs
 > `test/*.test.mjs` itself and hands the list to `node --test`, so all three Node versions
 > and both platforms behave identically (covered by CI).
 
-The suites are currently **294 tests across 18 files** (3 of them are platform-specific, so
-each platform actually runs 291):
+The suites are currently **300 tests across 18 files** (3 of them are platform-specific, so
+each platform actually runs 297):
 
 | Suite | Covers |
 |---|---|
@@ -245,7 +245,7 @@ each platform actually runs 291):
 | `audit.test.mjs` | audit log: field minimisation, truncation, rotation (without truncating the log being written), concurrency, unwritable/out-of-root paths, disabled, config bounds |
 | `perf-regression.test.mjs` | query-performance semantic guards: cold vs warm results identical field by field, no duplicate title reads within one request, N concurrent requests read once, failures recoverable, metrics never leak titles or `cwd` |
 | `client.test.mjs` | registration surface, ids, no-cross-package requires |
-| `render.test.mjs` | components **actually rendered** through a React stand-in; the four `titleState` placeholders must be pairwise distinguishable, and `empty` must not reuse `unread`'s wording |
+| `render.test.mjs` | components **actually rendered** through a React stand-in; the four `titleState` placeholders must be pairwise distinguishable, `empty` must not reuse `unread`'s wording, and every defaulted filter value (`archived` / `kind` / `blank`) must actually reach the request URL — a dropdown that only changes local state looks perfectly fine and filters nothing |
 | `artifacts.test.mjs` | path containment, symlink refusal, alternate-spelling guards, `isRealPathInside` positive and negative |
 | `session-id.test.mjs` | id validation (no separators or dots) |
 | `eol.test.mjs` | line endings, and that every tracked file is git-declared `eol=lf` |
@@ -284,7 +284,7 @@ Two of these exist because the corresponding bug actually shipped and was caught
 | `docs/RELEASING.md` | version rules and the release chain |
 | `scripts/release.ps1` | version bump + gate (+ CI pack/release) |
 | `scripts/render-shot.mjs` | regenerates the documentation screenshots |
-| `test/` | the 161-test regression suite |
+| `test/` | the 300-test regression suite |
 
 ## License
 

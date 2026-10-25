@@ -851,6 +851,89 @@ test("渲染：筛选区用定宽网格 + 列表用卡片行（布局回归）",
  *
  * 所以这里不看样式，只看**发出去的那个 URL**。
  */
+/**
+ * 【渲染层抓不到的那类漂移】空会话三选一必须真的进请求。
+ *
+ * 这条测试的存在理由：`params.blank` 有默认值 `hide`、下拉框也能改它、药丸上
+ * 文字也会跟着变 —— 但只要 `fetchList` 里漏掉 `if (params.blank) query.set(...)`，
+ * 服务端永远收到 undefined 并回落到自己的默认值，于是：
+ *   · 切到「全部」，列表毫无变化（因为服务端本来就在 hide）；
+ *   · 切到「仅显示空会话」，回来还是一屏真会话。
+ * 界面完全不报错，`params` 也确实是新值 —— 所有只看本地 state 的断言都是绿的。
+ * 所以这里只认**发出去的 URL**，和服务端真机验收（`blank=only` 返回 12 行全
+ * `titleState=blank`）形成两端对照。
+ */
+test("渲染：空会话三选一必须真的改变请求参数（不得只在本地 state 里改）", async () => {
+  const urls = [];
+  const listBody = {
+    ok: true,
+    value: {
+      total: 0,
+      page: { page: 1, pageSize: 50, pages: 1 },
+      items: [],
+      projects: [],
+      archived: { filter: "show", total: 0, known: true, subagentTotal: 0 },
+      blank: { filter: "hide", total: 4 },
+      kind: { filter: "main", subagentTotal: 0, mainTotal: 0 },
+      titles: { requested: 0, cached: 0, fetched: 0, failed: 0, truncated: 0, skipped: false },
+      tookMs: 1,
+    },
+  };
+  const app = boot({
+    hostActive: "zh",
+    fetchImpl: async (url) => {
+      urls.push(String(url));
+      return { status: 200, json: async () => listBody };
+    },
+  });
+  const entry = app.byName.get(SECTION_SLOT);
+  const paint = () => {
+    app.beginRender();
+    return app.render(app.React.createElement(entry.component, { close: () => {} }));
+  };
+
+  paint();
+  app.flushEffects();
+  await new Promise((r) => setTimeout(r, 0));
+  assert.ok(urls.length >= 1, "首屏必须发出一次列表请求");
+  assert.match(
+    urls[urls.length - 1],
+    /blank=hide/,
+    `默认必须显式发 blank=hide（服务端默认值靠它落实，不靠隐式回落），实际：${urls[urls.length - 1]}`,
+  );
+
+  // 切到「仅显示空会话」。
+  const tree = paint();
+  const field = filterFields(app, tree).find((f) => f.label === "空会话");
+  assert.ok(field, "必须渲染出「空会话」筛选字段");
+  const opened = openDropdown(app, field);
+  const items = (opened.menu.children ?? []).filter(
+    (c) => typeof c?.props?.className === "string" && c.props.className.includes("dscc-menu-item"),
+  );
+  const onlyItem = items.find((c) => collectText(c).join("").includes("仅显示空会话"));
+  assert.ok(onlyItem, "下拉里必须有「仅显示空会话」这一项");
+
+  onlyItem.props.onClick();
+  // 【顺序很重要】同上方 kind 用例：本替身的 effect 在 render 阶段收集、由
+  // flushEffects 执行，所以必须先重渲染一次让新 effect 登记上，再 flush。
+  paint();
+  app.flushEffects();
+  await new Promise((r) => setTimeout(r, 0));
+
+  const last = urls[urls.length - 1];
+  assert.match(last, /blank=only/, `选中后必须带上 blank=only，实际 URL：${last}`);
+  assert.doesNotMatch(last, /blank=hide/, "不得仍然带着旧值 hide");
+
+  // 药丸文字也要跟着变（用户要能复核自己筛的是什么）。
+  const after = paint();
+  const fieldAfter = filterFields(app, after).find((f) => f.label === "空会话");
+  assert.match(
+    collectText(selectorOf(fieldAfter)).join(""),
+    /仅显示空会话/,
+    "选择后药丸必须显示新值",
+  );
+});
+
 test("渲染：从下拉选一项必须改变请求参数并重发", async () => {
   const urls = [];
   const listBody = {

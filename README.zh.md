@@ -267,7 +267,7 @@ node scripts/render-shot.mjs
 > `Could not find '.../test/**/*.test.mjs'`。`scripts/run-tests.mjs` 由 Node 自己枚举
 > `test/*.test.mjs` 再交给 `node --test`，三个版本、两个平台行为一致（CI 已覆盖）。
 
-当前共 **294 条测试 / 18 个文件**（其中 3 条是平台相关用例，每个平台实际跑 291 条）：
+当前共 **300 条测试 / 18 个文件**（其中 3 条是平台相关用例，每个平台实际跑 297 条）：
 
 | 套件 | 覆盖 |
 |---|---|
@@ -279,7 +279,7 @@ node scripts/render-shot.mjs
 | `audit.test.mjs` | 审计：字段最小化、截断、轮转（含不截断正在写的日志）、并发、路径不可写/越界、禁用、配置边界 |
 | `perf-regression.test.mjs` | 查询性能不退化的语义护栏：冷/热结果逐字段一致、单请求不重复读标题、N 并发只读一次、失败可恢复、指标不泄露标题与 `cwd` |
 | `client.test.mjs` | 注册面、id、不跨包 require |
-| `render.test.mjs` | 组件**真的被渲染**（React 替身）；`titleState` 四种占位必须两两可区分，且 `empty` 不得复用 `unread` 的措辞 |
+| `render.test.mjs` | 组件**真的被渲染**（React 替身）；`titleState` 四种占位必须两两可区分，`empty` 不得复用 `unread` 的措辞；且凡是有默认值的筛选维度（`archived` / `kind` / `blank`）都必须真的进到请求 URL —— 只在本地 state 里改的下拉框看着完全正常，却什么都筛不到 |
 | `artifacts.test.mjs` | 路径约束、符号链接拒绝、另一种拼写的守卫、`isRealPathInside` 正反断言 |
 | `session-id.test.mjs` | id 校验（不含分隔符与点号） |
 | `eol.test.mjs` | 行尾，以及每个被跟踪文件都被 git 声明为 `eol=lf` |
@@ -321,7 +321,7 @@ node scripts/render-shot.mjs
 | `docs/RELEASING.md` | 版本号规则与发布链路 |
 | `scripts/release.ps1` | 版本递增 + 门禁（+ CI 打包发布） |
 | `scripts/render-shot.mjs` | 重新生成文档截图 |
-| `test/` | 161 条回归测试 |
+| `test/` | 300 条回归测试 |
 | `VERIFICATION.md` | 完整验收报告 |
 
 ## 关于上游

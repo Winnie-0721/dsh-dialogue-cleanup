@@ -1867,6 +1867,13 @@ window.__ModuleLoader__.load({
       if (typeof params.running === "boolean") query.set("running", String(params.running));
       if (params.sort) query.set("sort", params.sort);
       if (params.archived) query.set("archived", params.archived);
+      // 空会话三选一：hide | show | only。
+      // **必须真的发出去** —— 少了这一行，界面上的下拉框看着能切、`params.blank`
+      // 也确实改了，但请求里没带参数，服务端只能用它自己的默认值（hide）：
+      // 用户切到「全部」看不到任何变化，切到「仅显示空会话」还是满满一屏真会话。
+      // 这类「UI 状态改了但没进请求」的漂移，`render.test.mjs` 有一条专门
+      // 断言 URL 里必须出现 blank= 的用例（只看发出去的 URL，不看本地 state）。
+      if (params.blank) query.set("blank", params.blank);
       if (params.kind) query.set("kind", params.kind);
       query.set("page", String(params.page ?? 1));
       query.set("pageSize", String(params.pageSize ?? 50));
@@ -2054,6 +2061,10 @@ window.__ModuleLoader__.load({
           project: params.project,
           archived: params.archived,
           kind: params.kind,
+          // 空会话三选一也必须进请求 —— 它是「一屏（无标题）」的开关。
+          // 与 `fetchList` 里那行 `query.set("blank", ...)` 是**同一条链的两端**：
+          // 任一端漏掉，下拉框就变成「只看不生效」。两处由同一条测试覆盖。
+          blank: params.blank,
           sort: params.sort,
           page: params.page,
           pageSize: params.pageSize,
