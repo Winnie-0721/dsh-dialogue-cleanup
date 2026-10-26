@@ -128,7 +128,6 @@ window.__ModuleLoader__.load({
         "panel.idle": "空闲",
         "panel.persisted": "仅磁盘",
         "panel.live": "活动",
-        "panel.blank": "空会话",
         "panel.blocked": "不可删除",
         "panel.archived": "归档",
         "panel.archivedHint": "归档会话仍保存在磁盘上；删除才是真正的销毁。",
@@ -140,10 +139,9 @@ window.__ModuleLoader__.load({
         "panel.blankFilter": "空会话",
         "panel.blankHint": "空会话 = 从未收到过消息的会话（日志只有初始化事件，本来就没有标题）。它们数量往往远多于真会话，会把列表刷成一片「无标题」。默认隐藏，与官方侧栏一致。",
         "panel.blankHide": "隐藏空会话",
+        "panel.blankHideCount": "隐藏空会话（{n} 条）",
         "panel.blankShow": "全部（显示空会话）",
         "panel.blankOnly": "仅显示空会话",
-        "panel.blankRow": "空会话",
-        "panel.blankHiddenNotice": "已隐藏 {n} 条空会话（从未有消息的会话）。",
         "panel.blankOnlyEmpty": "暂无空会话",
         "panel.kind": "会话类型",
         "panel.kindHint": "官方侧栏默认隐藏子代理会话；这里可单独查看以便清理。子代理会话同样可删除。「未知」表示宿主没给出足够的身份证据（例如只出现在摘要里），删前请自行确认。",
@@ -265,7 +263,6 @@ window.__ModuleLoader__.load({
         "panel.idle": "Idle",
         "panel.persisted": "Disk only",
         "panel.live": "Live",
-        "panel.blank": "Blank",
         "panel.blocked": "Not deletable",
         "panel.archived": "Archive",
         "panel.archivedHint": "Archived sessions are still on disk; deleting is what actually destroys them.",
@@ -277,10 +274,9 @@ window.__ModuleLoader__.load({
         "panel.blankFilter": "Blank sessions",
         "panel.blankHint": "A blank session never received a message (its log holds only initialization events, so it never had a title). They usually far outnumber real sessions and can fill the list with \"(no title)\". Hidden by default, matching the official sidebar.",
         "panel.blankHide": "Hide blank sessions",
+        "panel.blankHideCount": "Hide blank sessions ({n})",
         "panel.blankShow": "All (show blank sessions)",
         "panel.blankOnly": "Blank sessions only",
-        "panel.blankRow": "Blank",
-        "panel.blankHiddenNotice": "{n} blank sessions hidden (never had a message).",
         "panel.blankOnlyEmpty": "No blank sessions",
         "panel.kind": "Session kind",
         "panel.kindHint": "The official sidebar hides subagent sessions by default; show them here to clean them up. Subagent sessions are deletable too. \"Unknown\" means the host gave no usable identity evidence (for example the row only came from a summary), so double-check before deleting.",
@@ -859,9 +855,6 @@ window.__ModuleLoader__.load({
 .dscc-panel-pager { display: flex; gap: 10px; align-items: center; justify-content: flex-end; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-tertiary); }
 .dscc-panel-cost { font-variant-numeric: tabular-nums; opacity: 0.85; }
 .dscc-panel-hidden { color: var(--dsw-alias-state-warn-primary); }
-/* 「已隐藏 N 条空会话」提示条：低调说明行 + 切到「仅显示空会话」的出口。
-   刻意不用告警色 —— 隐藏空会话是正常默认视图，不是异常。 */
-.dscc-panel-notice { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 10px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-tertiary); }
 
 /* ───────────── 弹窗：官方 Modal.module.css ─────────────
    【层级方案 · showModal() 进 top layer（2026-10-18 用户实测修复）】
@@ -2098,23 +2091,6 @@ window.__ModuleLoader__.load({
           : params.blank === "hide" && Number.isInteger(value?.blank?.total)
             ? value.blank.total
             : 0;
-      const blankNotice =
-        blankHiddenCount > 0
-          ? h(
-              "div",
-              { className: "dscc-panel-notice" },
-              h("span", null, t("panel.blankHiddenNotice", { n: blankHiddenCount })),
-              h(
-                "button",
-                {
-                  type: "button",
-                  className: "dscc-btn",
-                  onClick: () => setParams((prev) => ({ ...prev, blank: "only", page: 1 })),
-                },
-                t("panel.blankOnly"),
-              ),
-            )
-          : null;
       const selectedIds = Object.keys(selected).filter((id) => selected[id] === true);
       const deletableOnPage = items.filter((row) => row.deletable === true);
 
@@ -2274,11 +2250,24 @@ window.__ModuleLoader__.load({
             "panel.archivedHint",
           ),
           // 空会话三选一。这是「一屏无标题」的真正开关 —— 详见 params.blank 的注释。
+          //
+          // 【为什么条数写在这里，而不是另起一条提示横条】
+          // 之前默认视图上方还有一条常驻横条「已隐藏 N 条空会话」+ 一个「仅显示空会话」
+          // 按钮。但下拉框本身就在说「隐藏空会话」，横条里的按钮又与下拉第三项完全等价
+          // —— 同一件事在一屏里说了两遍，且横条还多占一行高度。现在把条数并进选中项的
+          // 文字里：信息一点没少（仍然是「本视图藏了多少条」），但只有一处出口。
+          // 条数只属于 hide 档，所以只给 hide 那个选项加后缀。
           select(
             "panel.blankFilter",
             params.blank,
             [
-              { value: "hide", label: t("panel.blankHide") },
+              {
+                value: "hide",
+                label:
+                  blankHiddenCount > 0
+                    ? t("panel.blankHideCount", { n: blankHiddenCount })
+                    : t("panel.blankHide"),
+              },
               { value: "show", label: t("panel.blankShow") },
               { value: "only", label: t("panel.blankOnly") },
             ],
@@ -2574,7 +2563,6 @@ window.__ModuleLoader__.load({
         ),
         toolbar,
         bulk,
-        blankNotice,
         tableBody,
         pager,
       );

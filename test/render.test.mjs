@@ -873,7 +873,7 @@ test("渲染：空会话三选一必须真的改变请求参数（不得只在�
       items: [],
       projects: [],
       archived: { filter: "show", total: 0, known: true, subagentTotal: 0 },
-      blank: { filter: "hide", total: 4 },
+      blank: { filter: "hide", total: 4, hiddenInView: 4 },
       kind: { filter: "main", subagentTotal: 0, mainTotal: 0 },
       titles: { requested: 0, cached: 0, fetched: 0, failed: 0, truncated: 0, skipped: false },
       tookMs: 1,
@@ -931,6 +931,72 @@ test("渲染：空会话三选一必须真的改变请求参数（不得只在�
     collectText(selectorOf(fieldAfter)).join(""),
     /仅显示空会话/,
     "选择后药丸必须显示新值",
+  );
+});
+
+test("渲染：空会话条数并进下拉选中文字，不得再另起一条重复的提示横条", async () => {
+  // 【背景】默认视图原本在列表上方还有一条常驻横条「已隐藏 N 条空会话」+ 一个
+  // 「仅显示空会话」按钮。但下拉框本身就在说「隐藏空会话」，横条里的按钮又与下拉
+  // 第三项完全等价 —— 同一件事在一屏里说了两遍，还多占一行。现在条数并进下拉选中
+  // 项的文字里，横条整条删除。这个用例钉住三件事：条数还在、只在一处、横条不再出现。
+  const urls = [];
+  const listBody = {
+    ok: true,
+    value: {
+      total: 0,
+      page: { page: 1, pageSize: 50, pages: 1 },
+      items: [],
+      projects: [],
+      archived: { filter: "show", total: 0, known: true, subagentTotal: 0 },
+      // 全库 13 条、本视图只藏 7 条 —— 界面必须显示 hiddenInView 那个 7。
+      blank: { filter: "hide", total: 13, hiddenInView: 7 },
+      kind: { filter: "main", subagentTotal: 0, mainTotal: 0 },
+      titles: { requested: 0, cached: 0, fetched: 0, failed: 0, truncated: 0, skipped: false },
+      tookMs: 1,
+    },
+  };
+  const app = boot({
+    hostActive: "zh",
+    fetchImpl: async (url) => {
+      urls.push(String(url));
+      return { status: 200, json: async () => listBody };
+    },
+  });
+  const entry = app.byName.get(SECTION_SLOT);
+  const paint = () => {
+    app.beginRender();
+    return app.render(app.React.createElement(entry.component, { close: () => {} }));
+  };
+
+  paint();
+  app.flushEffects();
+  await new Promise((r) => setTimeout(r, 0));
+
+  const tree = paint();
+  const allText = collectText(tree).join("");
+
+  // ① 条数必须还在，而且用的是「本视图藏了多少」那个数（7），不是全库的 13。
+  assert.match(
+    allText,
+    /7\s*条/,
+    `下拉选中项必须显示本视图藏掉的条数 7，实际整屏文字：${allText}`,
+  );
+  assert.ok(
+    !/13\s*条/.test(allText),
+    `不得显示全库的 13 条（那是另一个口径，会在带筛选的视图里多报），实际：${allText}`,
+  );
+
+  // ② 条数必须出现在下拉字段里（而不是散落在别处）。
+  const field = filterFields(app, tree).find((f) => f.label === "空会话");
+  assert.ok(field, "必须渲染出「空会话」筛选字段");
+  const pill = collectText(selectorOf(field)).join("");
+  assert.match(pill, /隐藏空会话/, `药丸必须说明当前是「隐藏空会话」，实际：${pill}`);
+  assert.match(pill, /7\s*条/, `药丸必须带上条数，实际：${pill}`);
+
+  // ③ 横条必须彻底消失：它的整句措辞不得再出现在任何地方。
+  assert.ok(
+    !/已隐藏/.test(allText),
+    `不得再出现「已隐藏 N 条空会话」的独立刻横条，实际整屏文字：${allText}`,
   );
 });
 

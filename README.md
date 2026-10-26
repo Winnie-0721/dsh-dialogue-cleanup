@@ -54,9 +54,10 @@ positioning made concrete:
   cleaning disk is this plugin's job, so blank sessions stay reachable for bulk deletion. The list
   reports `blank: { filter, total, hiddenInView }` — `total` is the whole-corpus count (like
   `archived.total`), `hiddenInView` is how many *this view* actually hid after the other filters
-  ran — and the panel's "N blank sessions hidden" line uses `hiddenInView`, so the number always
-  describes the list the user is looking at. One click switches the filter, so nothing ever looks
-  silently lost.
+  ran. The count is rendered **inside the filter's own selected label**
+  (`Hide blank sessions (7)`), so the number always describes the list you are looking at, and the
+  state is stated in exactly one place — there is no separate notice bar repeating what the dropdown
+  already says. One click switches the filter, so nothing ever looks silently lost.
 - **Subagent rows are labelled.** The official sidebar hides `origin: 'subagent'` rows entirely, so
   whenever those rows do appear (kind = subagent / all) each one is explicitly badged — a subagent
   session must never look like an ordinary conversation.
@@ -235,8 +236,8 @@ node scripts/render-shot.mjs
 > `test/*.test.mjs` itself and hands the list to `node --test`, so all three Node versions
 > and both platforms behave identically (covered by CI).
 
-The suites are currently **301 tests across 18 files** (3 of them are platform-specific, so
-each platform actually runs 298):
+The suites are currently **302 tests across 18 files** (3 of them are platform-specific, so
+each platform actually runs 299):
 
 | Suite | Covers |
 |---|---|
@@ -248,7 +249,7 @@ each platform actually runs 298):
 | `audit.test.mjs` | audit log: field minimisation, truncation, rotation (without truncating the log being written), concurrency, unwritable/out-of-root paths, disabled, config bounds |
 | `perf-regression.test.mjs` | query-performance semantic guards: cold vs warm results identical field by field, no duplicate title reads within one request, N concurrent requests read once, failures recoverable, metrics never leak titles or `cwd` |
 | `client.test.mjs` | registration surface, ids, no-cross-package requires |
-| `render.test.mjs` | components **actually rendered** through a React stand-in; the four `titleState` placeholders must be pairwise distinguishable, `empty` must not reuse `unread`'s wording, and every defaulted filter value (`archived` / `kind` / `blank`) must actually reach the request URL — a dropdown that only changes local state looks perfectly fine and filters nothing |
+| `render.test.mjs` | components **actually rendered** through a React stand-in; the four `titleState` placeholders must be pairwise distinguishable, `empty` must not reuse `unread`'s wording, every defaulted filter value (`archived` / `kind` / `blank`) must actually reach the request URL — a dropdown that only changes local state looks perfectly fine and filters nothing — and the blank-session count must live **inside the dropdown's own label** (one place, `hiddenInView`, no duplicate notice bar) |
 | `artifacts.test.mjs` | path containment, symlink refusal, alternate-spelling guards, `isRealPathInside` positive and negative |
 | `session-id.test.mjs` | id validation (no separators or dots) |
 | `eol.test.mjs` | line endings, and that every tracked file is git-declared `eol=lf` |
@@ -287,7 +288,7 @@ Two of these exist because the corresponding bug actually shipped and was caught
 | `docs/RELEASING.md` | version rules and the release chain |
 | `scripts/release.ps1` | version bump + gate (+ CI pack/release) |
 | `scripts/render-shot.mjs` | regenerates the documentation screenshots |
-| `test/` | the 300-test regression suite |
+| `test/` | the 302-test regression suite |
 
 ## License
 
