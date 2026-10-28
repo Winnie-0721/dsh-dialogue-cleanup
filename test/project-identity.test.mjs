@@ -262,11 +262,14 @@ test("projectKey：Windows 下大小写与正/反斜杠都归一到同一个键"
   const { projectKey } = await import("../lib/service.js");
   assert.equal(typeof projectKey, "function", "lib/service.js 必须导出 projectKey");
 
-  assert.equal(projectKey("E:\\Code\\Proj"), projectKey("e:/code/proj"));
-  assert.equal(projectKey("E:\\Code\\Proj\\"), projectKey("E:\\Code\\Proj"));
+  // 显式钉死 win32：这组断言说的是 Windows 的规则，不能让用例在 Linux CI 上
+  // 按 POSIX 规则跑 —— 那正是「Windows 绿、Linux 红」的来源。
+  const win32 = (value) => projectKey(value, "win32");
+  assert.equal(win32("E:\\Code\\Proj"), win32("e:/code/proj"));
+  assert.equal(win32("E:\\Code\\Proj\\"), win32("E:\\Code\\Proj"));
   // 尾部反斜杠 + 大小写 + 分隔符混合
-  assert.equal(projectKey("E:\\Code\\Proj\\"), projectKey("e:/CODE/proj"));
-  assert.notEqual(projectKey("E:\\Code\\Proj"), projectKey("E:\\Code\\Other"));
+  assert.equal(win32("E:\\Code\\Proj\\"), win32("e:/CODE/proj"));
+  assert.notEqual(win32("E:\\Code\\Proj"), win32("E:\\Code\\Other"));
 });
 
 test("projectKey：非 Windows 下大小写敏感（不同目录就是不同项目）", async () => {
@@ -286,7 +289,9 @@ test("projectKey：空值与非字符串一律 null（不能造出伪项目）",
     assert.equal(projectKey(value), null, `projectKey(${JSON.stringify(value)}) 必须为 null`);
   }
   assert.equal(projectKey("/"), "/");
-  assert.equal(projectKey("C:\\"), projectKey("c:/"));
+  // Windows 盘符根：`C:\` 与 `c:/` 在 Windows 上是同一个位置，必须归一到同一个键。
+  // 同样显式钉死 win32，避免用例在 Linux CI 上按 POSIX 规则跑。
+  assert.equal(projectKey("C:\\", "win32"), projectKey("c:/", "win32"));
 });
 
 test("项目身份：Windows 下大小写/分隔符不同也能筛出同一批会话；POSIX 下严格区分", async () => {

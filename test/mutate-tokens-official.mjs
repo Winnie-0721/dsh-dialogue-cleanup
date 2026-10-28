@@ -86,9 +86,11 @@ const MUTANTS = [
   // 所以**只看样式的测试全都会绿** —— 这条专门验证新加的功能测试真的能咬。
   ["G6 选中一项但不改变筛选", ["        if (option.value !== props.value && typeof props.onChange === \"function\") {\n          props.onChange(option.value);\n        }", "        if (false) {\n          props.onChange(option.value);\n        }"]],
   ["G7 把 label 当 value 传出去", ["          props.onChange(option.value);", "          props.onChange(option.label);"]],
-  // 会话 id 的显示策略：有标题不显示、无标题必须显示。两个方向都要能咬。
-  ["G8 一律显示 id（回到旧行为）", ["                  row.title ? null : h(\"code\", { className: \"dscc-row-id\" }, row.sessionId),", "                  h(\"code\", { className: \"dscc-row-id\" }, row.sessionId),"]],
-  ["G9 一律不显示 id（丢掉无标题的例外）", ["                  row.title ? null : h(\"code\", { className: \"dscc-row-id\" }, row.sessionId),\n                  row.title ? null : h(\"span\", { className: \"dscc-row-sep\" }, \"·\"),", "                  null,\n                  null,"]],
+  // 会话 id 的显示策略（三态）：有标题不显示、未取到标题必须显示、空会话不显示。
+  // 两个方向都要能咬。【2026-10-28 修】原来锚定的是旧两态写法 `row.title ? null : h(...)`
+  // （showRowId 三态改造后原文未命中 → 直接 SKIP，退化成「绿着的装饰品」）。
+  ["G8 一律显示 id（回到旧行为）", ["                  showRowId(row, t) ? h(\"code\", { className: \"dscc-row-id\" }, row.sessionId) : null,", "                  h(\"code\", { className: \"dscc-row-id\" }, row.sessionId),"]],
+  ["G9 一律不显示 id（丢掉无标题的例外）", ["                  showRowId(row, t) ? h(\"code\", { className: \"dscc-row-id\" }, row.sessionId) : null,\n                  showRowId(row, t) ? h(\"span\", { className: \"dscc-row-sep\" }, \"·\") : null,", "                  null,\n                  null,"]],
   ["G10 悬停提示里也丢掉 id", ["                    title: `${row.sessionId} · ${row.project ?? \"—\"} · ${formatTime(row.updatedAt ?? row.createdAt)}`,\n                  },\n                  // 【例外】", "                    title: `${row.project ?? \"—\"} · ${formatTime(row.updatedAt ?? row.createdAt)}`,\n                  },\n                  // 【例外】"]],
 
   // ── 第三轮：搜索必须真的匹配标题 + 预算外如实上报（service.js + client.js） ──

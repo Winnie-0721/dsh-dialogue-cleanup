@@ -1,5 +1,38 @@
 # 变更记录
 
+## Unreleased
+
+### 修复：投影缓存根位置是普通文件时，把「本来就没有缓存」报成了降级
+
+`removeProjectionCache` 删单个缓存条目前要 `lstat` 一次，用来区分「条目不存在」与
+「没删掉」。原来只认 `ENOENT` 算「不存在」，**但同一个场景在两个平台上报的错不一样**：
+
+| 平台 | 投影缓存根是一张普通文件时 `lstat(<根>/<id>.json)` 的错误码 |
+|---|---|
+| Windows | `ENOENT` |
+| Linux | `ENOTDIR` |
+
+于是 Linux 上删除会话时会多出一条 `projectionCache` 降级，`complete` 变 `false`、
+`partial` 变 `true`，界面显示「部分完成」—— 可实际上**根本就没有缓存可删**，主结论
+（会话确实被删掉）一点没受影响。这属于把 `absent` 报成 `failed`。
+
+**修法**：`ENOENT` 与 `ENOTDIR` 都归为「这个条目不存在」，其余错误码
+（`EACCES` / `EPERM` / `EIO` …）照旧如实记入 `failures` 并触发降级。
+回归测试 `test/transaction-boundary.test.mjs`「事务边界：投影缓存根路径异常 —— 视为
+『没有缓存』，不得抛错也不得伪造降级」现在在两个平台上语义一致（此前只在 Windows 绿）。
+
+### 修复：测试与变异脚本在 Linux 上假红 / 变异退化成装饰品
+
+- `test/project-identity.test.mjs` 里两条断言 Windows 路径归一规则的用例**没有显式传
+  `platform`**，于是在 Linux CI 上按 POSIX 规则跑、必然红（`'E:\\Code\\Proj'` 与
+  `'e:/code/proj'` 在 POSIX 上确实是两个项目）。改成显式钉死 `win32`，与旁边
+  「非 Windows 下大小写敏感」那条用例的做法一致。
+- `test/mutate-tokens-official.mjs` 的 G8 / G9 两条变异还锚定着旧的两态写法
+  `row.title ? null : h(...)`；会话 id 改成 `showRowId` 三态后**原文未命中**，直接
+  `SKIP` 并被计入 `survived`，CI 的「survived 必须为 0」闸门因此一直红。重新锚定到
+  `showRowId(row, t) ? h(...) : null`，两个方向（一律显示 id / 一律不显示 id）都重新
+  能咬住。变异测试现为 `killed 71 / survived 0`。
+
 ## 1.2.0
 
 这一版把「列表里几处说不清的空状态」一次说清楚，并新增 5 个查询能力。全部改动向后兼容：
