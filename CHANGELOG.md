@@ -1,6 +1,22 @@
 # 变更记录
 
-## Unreleased
+## 1.2.0
+
+这一版把「列表里几处说不清的空状态」一次说清楚，并新增 5 个查询能力。全部改动向后兼容：
+没有删除任何既有字段、参数或端点，旧客户端照常工作。
+
+### 新功能：标题四态 / 会话分类三态 / 空会话筛选
+
+| 新增 | 说明 |
+|---|---|
+| `items[].titleState` | 每行标题的四态：`ready`（有标题）/ `blank`（空会话，从未有消息）/ `empty`（宿主确认没有标题记录）/ `unread`（非空但本次没读到）。四态两两可区分，**「本来没有标题」不再和「本次没读到」长得一样**。 |
+| `items[].classification` | 会话身份三态 `main` / `subagent` / `unknown`，另带 `classificationSource`（`corpus` / `summary` / `corpus+summary`）。身份未知的会话**不再被默认当成主会话**。 |
+| `kind=unknown` | `/list` 的 `kind` 过滤放行第四个取值（GET 与 POST 共用同一份白名单）；面板新增「会话类型」四选一与「未知」徽标。 |
+| `blank` 三选一 | `/list?blank=hide\|show\|only`，默认 `hide` —— 空会话默认不再占满首屏。 |
+| `blank.hiddenInView` | 本次视图**实际**藏掉的空会话条数（已扣除 project / kind / archived / running 等其它筛选），区别于全库口径的 `blank.total`。 |
+
+另外：项目身份字段统一为「`cwd` 权威、workspace.path 只作兜底」，`item.project`、项目下拉选项、
+项目筛选三处同源；workspace 多方认领时改为「首个声明者胜」。
 
 ### 修复：空会话提示条与下拉框重复 —— 同一件事在一屏里说了两遍
 
